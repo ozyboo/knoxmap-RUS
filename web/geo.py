@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -232,3 +234,121 @@ def api_overpass():
     return jsonify({"endpoints": [str(u) for u in configured] if isinstance(configured, list) else [],
                     "using": list(osm.OVERPASS_ENDPOINTS),
                     "public": list(osm._DEFAULT_ENDPOINTS)})
+
+
+@bp.route("/api/overpass/status")
+def api_overpass_status():
+    """Whether each server in use answers right now, and how fast. One tiny
+    query per server, asked together, so this costs a few seconds in all.
+    "resting" is what the downloads themselves currently think of it."""
+    from concurrent import futures
+
+    def one(endpoint: str) -> dict:
+        t0 = time.time()
+        ok = osm._probe(endpoint, 40.0, -74.0)
+        return {"url": endpoint, "host": endpoint.split("/")[2], "ok": ok,
+                "seconds": round(time.time() - t0, 1),
+                "resting": osm._is_cooling(endpoint),
+                "regional": any(h in endpoint for h in osm.BLANK_ONLY_HOSTS)}
+
+    endpoints = list(osm.OVERPASS_ENDPOINTS)
+    with futures.ThreadPoolExecutor(max_workers=max(1, len(endpoints))) as pool:
+        return jsonify({"servers": list(pool.map(one, endpoints))})
+
+
+# ---- a server of your own, in Docker ---------------------------------------------
+#
+# docs/SELF_HOSTING_OVERPASS.md by hand, as buttons. KnoxMap only starts and
+# stops one container of its own name; the extract has to come from Geofabrik.
+LOCAL_NAME = "knoxmap-overpass"
+LOCAL_PORT = 12345
+LOCAL_URL = f"http://localhost:{LOCAL_PORT}/api/interpreter"
+LOCAL_EXTRACT = re.compile(r"^https://download\.geofabrik\.de/[A-Za-z0-9._/-]+\.osm\.bz2$")
+
+
+def _docker(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(["docker", *args], capture_output=True, text=True,
+                          timeout=timeout, errors="replace")
+
+
+def _local_state() -> dict:
+    """Docker present or not, and what the container is doing."""
+    import requests
+
+    if not shutil.which("docker"):
+        return {"docker": False, "state": "none", "url": LOCAL_URL}
+    try:
+        ps = _docker("ps", "-a", "--filter", f"name=^{LOCAL_NAME}$",
+                     "--format", "{{.State}}")
+    except (OSError, subprocess.SubprocessError):
+        return {"docker": False, "state": "none", "url": LOCAL_URL}
+    if ps.returncode != 0:
+        return {"docker": False, "state": "none", "url": LOCAL_URL,
+                "error": (ps.stderr or "").strip()[-300:]}
+    running = ps.stdout.strip()
+    if not running:
+        return {"docker": True, "state": "none", "url": LOCAL_URL}
+    out = {"docker": True, "url": LOCAL_URL,
+           "state": "stopped" if running != "running" else "loading"}
+    if running == "running":
+        try:
+            ready = requests.get(f"http://localhost:{LOCAL_PORT}/api/status", timeout=3).ok
+        except requests.RequestException:
+            ready = False
+        out["state"] = "ready" if ready else "loading"
+        if not ready:
+            try:
+                tail = _docker("logs", "--tail", "1", LOCAL_NAME).stdout
+                tail = tail or _docker("logs", "--tail", "1", LOCAL_NAME).stderr
+                out["log"] = (tail or "").strip()[-200:]
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return out
+
+
+@bp.route("/api/local-overpass", methods=["GET", "POST"])
+def api_local_overpass():
+    """Run, stop, remove or start using a local Overpass server in Docker."""
+    import knoxpaths
+
+    if request.method == "GET":
+        return jsonify(_local_state())
+    body = _json_body()
+    action = str(body.get("action") or "")
+    state = _local_state()
+    if action in ("start", "stop", "remove") and not state["docker"]:
+        return jsonify({"error": "Docker is not installed or not running. Install Docker "
+                                 "Desktop, start it, and try again."}), 400
+    try:
+        if action == "start":
+            if state["state"] == "none":
+                extract = str(body.get("extract") or "").strip()
+                if not LOCAL_EXTRACT.match(extract):
+                    return jsonify({"error": "Give a Geofabrik extract ending in .osm.bz2, "
+                                             "e.g. https://download.geofabrik.de/north-america/"
+                                             "us/tennessee-latest.osm.bz2"}), 400
+                r = _docker("run", "-d", "--name", LOCAL_NAME,
+                            "-p", f"127.0.0.1:{LOCAL_PORT}:80", "-v", "knoxmap_overpass_db:/db",
+                            "-e", "OVERPASS_MODE=init", "-e", f"OVERPASS_PLANET_URL={extract}",
+                            "-e", "OVERPASS_RULES_LOAD=10", "wiktorn/overpass-api", timeout=600)
+            else:
+                r = _docker("start", LOCAL_NAME)
+        elif action == "stop":
+            r = _docker("stop", LOCAL_NAME, timeout=120)
+        elif action == "remove":
+            r = _docker("rm", "-f", LOCAL_NAME, timeout=120)
+        elif action == "use":
+            current = [u for u in osm.OVERPASS_ENDPOINTS if u != LOCAL_URL]
+            urls = [LOCAL_URL] + current
+            knoxpaths.update_config({"overpass_endpoints": urls})
+            osm.set_endpoints(urls)
+            log.info("overpass servers: %s", urls)
+            return jsonify(_local_state())
+        else:
+            return jsonify({"error": "Unknown action."}), 400
+    except (OSError, subprocess.SubprocessError) as exc:
+        return jsonify({"error": f"Docker did not answer: {exc}"}), 502
+    if r.returncode != 0:
+        return jsonify({"error": (r.stderr or r.stdout or "docker failed").strip()[-400:]}), 502
+    log.info("local overpass: %s", action)
+    return jsonify(_local_state())

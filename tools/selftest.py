@@ -3192,6 +3192,52 @@ def check_overpass_setting(check, work: str) -> None:
         check(client.post("/api/overpass", json=[1]).get_json()["using"] == osm.OVERPASS_ENDPOINTS
               and osm.OVERPASS_ENDPOINTS == list(osm._DEFAULT_ENDPOINTS),
               "an empty answer goes back to the public servers")
+
+        # The status list: one row per server, from a stand-in probe.
+        was_probe = osm._probe
+        osm._probe = lambda endpoint, lat, lon: "osm.ch" not in endpoint
+        try:
+            rows = client.get("/api/overpass/status").get_json()["servers"]
+        finally:
+            osm._probe = was_probe
+        check(len(rows) == len(osm.OVERPASS_ENDPOINTS)
+              and any(not r["ok"] and r["regional"] for r in rows)
+              and any(r["ok"] and not r["regional"] for r in rows),
+              "the server test lists every server, says which answer, and marks the regional ones")
+
+        # A server of your own in Docker, with Docker stood in for.
+        from web import geo
+        was_which, was_docker = geo.shutil.which, geo._docker
+        calls = []
+
+        class Done:
+            def __init__(self, out="", code=0):
+                self.stdout, self.stderr, self.returncode = out, "", code
+
+        def fake_docker(*args, timeout=30):
+            calls.append(args)
+            return Done("" if args[0] == "ps" else "id")
+        try:
+            geo.shutil.which = lambda name: None
+            check(client.get("/api/local-overpass").get_json()["docker"] is False
+                  and client.post("/api/local-overpass", json={"action": "start"}).status_code == 400,
+                  "without Docker the local server says so and starts nothing")
+            geo.shutil.which, geo._docker = (lambda name: "docker"), fake_docker
+            check(client.post("/api/local-overpass", json={
+                "action": "start", "extract": "https://evil.example/x.osm.bz2"}).status_code == 400
+                and not any(c[0] == "run" for c in calls),
+                "only a Geofabrik extract is accepted, and nothing is run for any other")
+            good = "https://download.geofabrik.de/north-america/us/tennessee-latest.osm.bz2"
+            client.post("/api/local-overpass", json={"action": "start", "extract": good})
+            run = next((c for c in calls if c[0] == "run"), ())
+            check(f"OVERPASS_PLANET_URL={good}" in run and "127.0.0.1:12345:80" in run,
+                  "a good extract starts the container, reachable from this PC only")
+            d = client.post("/api/local-overpass", json={"action": "use"}).get_json()
+            check(osm.OVERPASS_ENDPOINTS[0] == geo.LOCAL_URL
+                  and len(osm.OVERPASS_ENDPOINTS) == len(osm._DEFAULT_ENDPOINTS) + 1,
+                  "using it puts it first and keeps the public servers behind it")
+        finally:
+            geo.shutil.which, geo._docker = was_which, was_docker
     finally:
         knoxpaths.CONFIG_PATH = was_path
         osm.set_endpoints(was_urls if was_urls != list(osm._DEFAULT_ENDPOINTS) else None)
