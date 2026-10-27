@@ -407,6 +407,10 @@ def api_install():
     # Both end up in folder names and mod.info, so they are text of a sane
     # length whatever the page sent.
     raw_title, raw_id = data.get("title"), data.get("modId")
+    # An update names neither: it goes back in as what is installed now.
+    before = mapstate.installed(str(map_dir)) or {}
+    raw_title = raw_title or before.get("title")
+    raw_id = raw_id or before.get("modId")
     title = (raw_title if isinstance(raw_title, str) and raw_title.strip()
              else map_dir.name).strip()[:80]
     mod_id = SAFE_NAME.sub("_", raw_id if isinstance(raw_id, str) and raw_id.strip()
@@ -430,7 +434,7 @@ def api_install():
     except Exception as exc:
         return failed(f"Install failed: {exc}", 500, exc)
     mapstate.stamp(str(map_dir), "install")
-    mapstate.record_install(str(map_dir), str(mod_root), mod_id)
+    mapstate.record_install(str(map_dir), str(mod_root), mod_id, title)
     log.info("install %s: %d cells as %s, extras %s", map_dir.name, n_cells, mod_id, extras)
     return jsonify({"modRoot": str(mod_root), "cells": n_cells,
                     "extras": extras, "modId": mod_id, "title": title})

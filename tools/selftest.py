@@ -3562,6 +3562,23 @@ def check_install_folder(check, out: str, work: str, client) -> None:
         check(client.post("/api/uninstall", json={"mapName": "selftest"}).status_code == 404,
               "and a map that is not installed has nothing to remove")
 
+        # Update: no title or id sent, so the installed ones are used again.
+        from tools import make_map_mod as _mmm
+        mod.mkdir(parents=True, exist_ok=True)
+        (mod / "mod.info").write_text("name=Kept Title\n", encoding="utf-8")
+        mapstate.record_install(out, str(mod), "KeptId", "Kept Title")
+        asked = []
+        was_package = _mmm.package
+        _mmm.package = lambda d, title, mid: (asked.append((title, mid)) or (str(mod), 1, []))
+        try:
+            r = client.post("/api/install", json={"mapName": "selftest"})
+        finally:
+            _mmm.package = was_package
+        check(r.status_code == 200 and asked == [("Kept Title", "KeptId")],
+              "updating an installed map puts it back under its own title and id")
+        mapstate.forget_install(out)
+        shutil.rmtree(mod, ignore_errors=True)
+
         # A record that points at someone else's folder: refused, nothing deleted.
         theirs = zroot / "mods" / "SomeoneElsesMod"
         theirs.mkdir()
