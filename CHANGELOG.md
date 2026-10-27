@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.6.4
+
+- **More map data servers, a server test, and a server of your own**
+  (`generator/osm.py`, `web/geo.py`, `static/js/app.js`). Four more public
+  Overpass servers are tried: `overpass.private.coffee` (worldwide) and three
+  regional ones (UK and Ireland, Virginia, Ethiopia). The regional ones answer
+  nothing outside their area, so they are asked last, and an empty tile is only
+  believed when a worldwide server agrees. **Map data server** now has a
+  **Test the servers** button that shows which answer, and **Run your own
+  server (Docker)** starts, stops and uses a local Overpass server from a
+  Geofabrik extract.
+
 ## 1.7.6.3
 
 - **Choose where maps are installed, and take them out again**

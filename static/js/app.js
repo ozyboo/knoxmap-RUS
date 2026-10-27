@@ -1022,6 +1022,74 @@ document.getElementById('overpassSave').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('overpassPublic').addEventListener('click', async () => {
+  try {
+    const d = await (await fetch('/api/overpass')).json();
+    document.getElementById('overpassList').value = (d.public || []).join('\n');
+    note('overpassNote', 'Edit the list, then press Save.', 'ok');
+  } catch (err) { note('overpassNote', err.message, 'bad'); }
+});
+
+document.getElementById('overpassTest').addEventListener('click', async () => {
+  const btn = document.getElementById('overpassTest');
+  const out = document.getElementById('overpassStatus');
+  btn.disabled = true;
+  out.innerHTML = '<p class="hint">Asking each server…</p>';
+  try {
+    const d = await (await fetch('/api/overpass/status')).json();
+    out.innerHTML = '<ul class="setup-list">' + d.servers.map(s =>
+      `<li class="${s.ok ? 'ok' : 'missing'}"><span>${s.ok ? '✓' : '✗'}</span>
+        <b>${escapeHtml(s.host)}</b> — ${s.ok ? `${s.seconds} s` : 'not answering'}${
+          s.regional ? ' (one region only)' : ''}${s.resting ? ', resting' : ''}</li>`).join('')
+      + '</ul>' + (d.servers.some(s => s.ok && !s.regional) ? ''
+        : '<p class="hint">No server with worldwide data answered. Downloads will wait '
+          + 'and retry; a server of your own avoids this.</p>');
+  } catch (err) {
+    out.innerHTML = `<p class="hint">Could not test: ${escapeHtml(err.message)}</p>`;
+  } finally { btn.disabled = false; }
+});
+
+// A server of your own in Docker.
+let localTimer = null;
+async function localCall(action, extra) {
+  const res = await fetch('/api/local-overpass', extra === undefined && !action
+    ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, ...extra }) });
+  const data = await res.json();
+  if (!res.ok) throw apiError(data, res);
+  return data;
+}
+function showLocal(d) {
+  const text = !d.docker ? 'Docker was not found. Install Docker Desktop and start it.'
+    : { none: 'Not set up.', stopped: 'Stopped.', ready: 'Running and ready.',
+        loading: 'Loading the region' + (d.log ? ` — ${d.log}` : '…') }[d.state];
+  note('localNote', text, d.state === 'ready' ? 'ok' : '');
+  const show = (id, on) => { document.getElementById(id).hidden = !on; };
+  document.getElementById('localExtract').hidden = d.state !== 'none';
+  show('localStart', d.docker && d.state !== 'loading' && d.state !== 'ready');
+  show('localUse', d.state === 'ready');
+  show('localStop', d.state === 'ready' || d.state === 'loading');
+  show('localRemove', d.docker && d.state !== 'none');
+  clearTimeout(localTimer);
+  if (d.state === 'loading') localTimer = setTimeout(refreshLocal, 15000);
+}
+async function refreshLocal() {
+  try { showLocal(await localCall()); } catch (_) { /* leave it as it was */ }
+}
+for (const [id, action] of [['localStart', 'start'], ['localUse', 'use'],
+                            ['localStop', 'stop'], ['localRemove', 'remove']]) {
+  document.getElementById(id).addEventListener('click', async () => {
+    try {
+      if (action === 'remove' && !confirm('Remove the local server and its loaded map data?')) return;
+      showLocal(await localCall(action, { extract: document.getElementById('localExtract').value }));
+      if (action === 'use') note('localNote', 'Downloads now try your server first.', 'ok');
+    } catch (err) { note('localNote', err.message, 'bad'); }
+  });
+}
+document.getElementById('overpassPanel').addEventListener('toggle', e => {
+  if (e.target.open) refreshLocal(); else clearTimeout(localTimer);
+});
+
 // ---- before publishing -----------------------------------------------------------
 
 document.getElementById('publishCheckBtn').addEventListener('click', async () => {

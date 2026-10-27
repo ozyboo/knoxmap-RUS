@@ -6,6 +6,10 @@ ask for roughly under 10,000 requests and 1 GB a day each (see
 downloads should come from a server of your own. KnoxMap needs nothing else
 changed: it sends the same queries, to your address.
 
+The **Map data server** panel can do all of this for you if Docker Desktop is
+installed: paste a Geofabrik `.osm.bz2` address, press Start, and press Use it
+when it says ready. The steps below are the same thing by hand.
+
 ## 1. Run an Overpass server for your region
 
 The simplest way is the community Docker image

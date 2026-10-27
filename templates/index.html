@@ -101,7 +101,22 @@
         <textarea id="overpassList" rows="3" spellcheck="false"
           placeholder="http://localhost:12345/api/interpreter"></textarea>
         <button id="overpassSave" class="btn btn-small" type="button">Save</button>
+        <button id="overpassPublic" class="btn btn-small" type="button">Fill in the public servers</button>
         <span id="overpassNote" class="step-note"></span>
+        <h4>Are they answering?</h4>
+        <button id="overpassTest" class="btn btn-small" type="button">Test the servers</button>
+        <div id="overpassStatus"></div>
+        <h4>Run your own server (Docker)</h4>
+        <p class="hint">Needs Docker Desktop. Downloads one region from Geofabrik and serves it
+          from this PC; loading takes minutes to hours. Maps outside the region will
+          come from the public servers.</p>
+        <input id="localExtract" type="text" spellcheck="false"
+          placeholder="https://download.geofabrik.de/north-america/us/tennessee-latest.osm.bz2">
+        <button id="localStart" class="btn btn-small" type="button">Start</button>
+        <button id="localUse" class="btn btn-small" type="button" hidden>Use it</button>
+        <button id="localStop" class="btn btn-small" type="button" hidden>Stop</button>
+        <button id="localRemove" class="btn btn-small" type="button" hidden>Remove</button>
+        <div id="localNote" class="step-note"></div>
       </details>
     </section>
 

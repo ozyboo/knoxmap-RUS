@@ -44,11 +44,19 @@ _DEFAULT_ENDPOINTS = [
     # kumi.systems stops answering for long stretches; this one was answering
     # real data when it did.
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    # kumi.systems' successor, listed on the OSM wiki as a global instance
+    # with no rate limit and no key.
+    "https://overpass.private.coffee/api/interpreter",
     # A third, because the other two go busy together: when one instance
     # is queueing the people it turned away are queueing on the next.
     # It is last because it is the one that answers an ordinary query with an
     # empty result - see EMPTY_NEEDS_SECOND below.
     "https://overpass.osm.ch/api/interpreter",
+    # More regional instances. Like osm.ch they answer blank outside their own
+    # area, so they are blank-only too (BLANK_ONLY_HOSTS).
+    "https://overpass.atownsend.org.uk/api/interpreter",
+    "https://overpass.maprva.org/api/interpreter",
+    "https://ethiopia.overpass.openplaceguide.org/api/interpreter",
 ]
 OVERPASS_ENDPOINTS = _config_list("overpass_endpoints") or _DEFAULT_ENDPOINTS
 # overpass.openstreetmap.fr answers every query with 403 "This service is only
@@ -59,7 +67,9 @@ OVERPASS_ENDPOINTS = _config_list("overpass_endpoints") or _DEFAULT_ENDPOINTS
 # out: it is still asked, and its blank still counts towards BLANKS_TO_BELIEVE,
 # but it is not capacity and must not be counted as a download slot.
 BLANK_ONLY_HOSTS = tuple(_config_list("overpass_blank_only")
-                         or ["overpass.osm.ch"])
+                         or ["overpass.osm.ch", "overpass.atownsend.org.uk",
+                              "overpass.maprva.org",
+                              "ethiopia.overpass.openplaceguide.org"])
 ANSWERING_ENDPOINTS = [e for e in OVERPASS_ENDPOINTS
                        if not any(h in e for h in BLANK_ONLY_HOSTS)]
 
@@ -432,6 +442,7 @@ def fetch_features(south: float, west: float, north: float, east: float,
     too_big = False
     timed_out = False
     blank = 0
+    real_blank = 0
     order = _endpoint_order(first)
     for endpoint in order:
         host = endpoint.split("/")[2]
@@ -459,6 +470,7 @@ def fetch_features(south: float, west: float, north: float, east: float,
             # in it, because the tiles that did download held the river.
             # Nothing is only believed when a second instance agrees.
             blank += 1
+            real_blank += endpoint in ANSWERING_ENDPOINTS
             errors.append(f"{host}: answered with nothing")
         time.sleep(1)
     # Two instances have to say the tile is empty before it is. One saying so
@@ -467,7 +479,10 @@ def fetch_features(south: float, west: float, north: float, east: float,
     # emptied the map in the first place. Raising sends the tile back round
     # fetch_features_tiled's retry, and if it really will not download the
     # download says so instead of handing back a meadow.
-    if blank >= BLANKS_TO_BELIEVE:
+    # Regional instances are blank everywhere but home, so their agreement
+    # alone proves nothing: one of the instances that answer with data has to
+    # be among them.
+    if blank >= BLANKS_TO_BELIEVE and real_blank:
         return []
     raise OverpassError("every Overpass endpoint failed — "
                         + "; ".join(errors), too_big=too_big,
