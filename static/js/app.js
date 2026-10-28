@@ -4463,6 +4463,10 @@ let placePreview = null;        // this map's own picture, once it has loaded
 const placePictures = {};       // the game's own maps, by name, once loaded
 let placeRoad = [];             // a road being drawn, in world tiles
 let placeDrawingRoad = false;
+// What part of the world the canvas is showing: how far in, and the world
+// tile at its top-left corner. Zoom 1 is the whole world.
+const placeView = { zoom: 1, x: 0, y: 0 };
+const PLACE_MAX_ZOOM = 24;
 
 const PLACE_PAD = 8;            // cells of empty grid round what is drawn
 const PLACE_MIN_SPAN = 110;     // never zoom in closer than this many cells
@@ -4514,10 +4518,41 @@ function placeSpan() {
   return { w: right + PLACE_PAD * k, h: down + PLACE_PAD * k };
 }
 
-function placeScale() {
+function placeFitScale() {
   const canvas = document.getElementById('placeCanvas');
   const span = placeSpan();
   return Math.min(canvas.width / span.w, canvas.height / span.h);
+}
+
+// Canvas pixels per world tile, zoom included.
+function placeScale() {
+  return placeFitScale() * placeView.zoom;
+}
+
+// Keep the view on the world: not scrolled past its edges.
+function placeClampView() {
+  const canvas = document.getElementById('placeCanvas');
+  const span = placeSpan();
+  const k = placeScale();
+  placeView.x = Math.max(0, Math.min(placeView.x, span.w - canvas.width / k));
+  placeView.y = Math.max(0, Math.min(placeView.y, span.h - canvas.height / k));
+  if (placeView.zoom <= 1) { placeView.x = 0; placeView.y = 0; }
+}
+
+// Zoom by `factor`, keeping the world tile under (px, py) - canvas pixels -
+// where it is, so the wheel zooms into what the pointer is on.
+function placeZoomBy(factor, px, py) {
+  const canvas = document.getElementById('placeCanvas');
+  if (px === undefined) { px = canvas.width / 2; py = canvas.height / 2; }
+  const before = placeScale();
+  const tx = px / before + placeView.x;
+  const ty = py / before + placeView.y;
+  placeView.zoom = Math.max(1, Math.min(PLACE_MAX_ZOOM, placeView.zoom * factor));
+  const after = placeScale();
+  placeView.x = tx - px / after;
+  placeView.y = ty - py / after;
+  placeClampView();
+  drawWorld();
 }
 
 function hits(a, b) {
@@ -4559,6 +4594,9 @@ function drawWorld() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#0d100c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  placeClampView();
+  ctx.save();
+  ctx.translate(-placeView.x * k, -placeView.y * k);
 
   // The grid, every ten cells, so distances are readable.
   const span = placeSpan();
@@ -4634,6 +4672,7 @@ function drawWorld() {
       ctx.fill();
     }
   }
+  ctx.restore();
 }
 
 function placeSummary() {
@@ -4716,7 +4755,8 @@ function placeAt(ev) {
   const rect = canvas.getBoundingClientRect();
   const k = placeScale();
   const scale = canvas.width / rect.width;   // drawn at its own size, shown scaled
-  return [(ev.clientX - rect.left) * scale / k, (ev.clientY - rect.top) * scale / k];
+  return [(ev.clientX - rect.left) * scale / k + placeView.x,
+          (ev.clientY - rect.top) * scale / k + placeView.y];
 }
 
 function placeFromEvent(ev) {
@@ -4742,8 +4782,25 @@ function placeFromEvent(ev) {
     placeFields();
     placeState();
   };
+  // The middle button drags the view about; the left one picks where the map
+  // goes. Pointer position in canvas pixels, whatever size it is shown at.
+  let panning = null;
+  const canvasPx = ev => {
+    const box = canvas.getBoundingClientRect();
+    const f = canvas.width / box.width;
+    return [(ev.clientX - box.left) * f, (ev.clientY - box.top) * f];
+  };
   canvas.addEventListener('pointerdown', ev => {
     if (!placeWorld) return;
+    if (ev.button === 1) {
+      ev.preventDefault();                  // no autoscroll circle
+      const [px, py] = canvasPx(ev);
+      panning = { px, py, x: placeView.x, y: placeView.y };
+      canvas.setPointerCapture(ev.pointerId);
+      return;
+    }
+    if (ev.button !== 0) return;
+    canvas.focus({ preventScroll: true });
     if (placeDrawingRoad) {
       placeRoad.push(placeAt(ev).map(Math.round));
       drawWorld();
@@ -4754,9 +4811,47 @@ function placeFromEvent(ev) {
     canvas.setPointerCapture(ev.pointerId);
     pick(ev);
   });
-  canvas.addEventListener('pointermove', ev => { if (placeDragging) pick(ev); });
-  canvas.addEventListener('pointerup', () => { placeDragging = false; });
-  canvas.addEventListener('pointercancel', () => { placeDragging = false; });
+  canvas.addEventListener('pointermove', ev => {
+    if (panning) {
+      const [px, py] = canvasPx(ev);
+      const k = placeScale();
+      placeView.x = panning.x - (px - panning.px) / k;
+      placeView.y = panning.y - (py - panning.py) / k;
+      drawWorld();
+      return;
+    }
+    if (placeDragging) pick(ev);
+  });
+  const release = () => { placeDragging = false; panning = null; };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('auxclick', ev => ev.preventDefault());
+  canvas.addEventListener('wheel', ev => {
+    if (!placeWorld) return;
+    ev.preventDefault();                    // the page does not scroll under it
+    const [px, py] = canvasPx(ev);
+    placeZoomBy(ev.deltaY < 0 ? 1.25 : 1 / 1.25, px, py);
+  }, { passive: false });
+  // + and - zoom while the pointer is over the map or it has focus; 0 shows
+  // the whole world again. Not when typing in one of the boxes.
+  let over = false;
+  canvas.addEventListener('pointerenter', () => { over = true; });
+  canvas.addEventListener('pointerleave', () => { over = false; });
+  document.addEventListener('keydown', ev => {
+    if (!placeWorld || !(over || document.activeElement === canvas)) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName || '')) return;
+    if (ev.key === '+' || ev.key === '=') placeZoomBy(1.4);
+    else if (ev.key === '-' || ev.key === '_') placeZoomBy(1 / 1.4);
+    else if (ev.key === '0') { placeView.zoom = 1; drawWorld(); }
+    else return;
+    ev.preventDefault();
+  });
+  document.getElementById('placeZoomIn').addEventListener('click', () => placeZoomBy(1.4));
+  document.getElementById('placeZoomOut').addEventListener('click', () => placeZoomBy(1 / 1.4));
+  document.getElementById('placeZoomFit').addEventListener('click', () => {
+    placeView.zoom = 1;
+    drawWorld();
+  });
   canvas.addEventListener('dblclick', () => {
     if (placeDrawingRoad) stopRoad();
   });
@@ -4781,8 +4876,10 @@ for (const id of ['placeX', 'placeY']) {
 function sayIfInstallable() {
   const btn = document.getElementById('installBtn');
   if (placeWorld && placeWorld.compiled && !placeWorld.lotsMatch) {
-    note('installNote', 'This map has been moved since it was compiled. '
-      + 'Compile it again, then install.', 'bad');
+    note('installNote', 'This map was moved after it was compiled. '
+      + 'Compile it again (step 5), then install.', 'bad');
+    note('compileNote', 'The map was moved on the world map since the last '
+      + 'compile. Compile it again.', 'warn');
     btn.disabled = true;
     return false;
   }

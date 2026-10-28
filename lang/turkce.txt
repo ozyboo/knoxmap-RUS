@@ -23,8 +23,8 @@ On turns the map so the main street grid runs along the tiles - no staircase roa
 3 m per tile = karo başına 3 m
 3. Buildings = 3. Binalar
 4 m per tile = karo başına 4 m
-4. Compile = 4. Derle
-5. Install = 5. Kur
+5. Compile = 5. Derle
+6. Install = 6. Kur
 6 m per tile = karo başına 6 m
 8 m per tile (whole regions) = karo başına 8 m (bütün bölgeler)
 a few metres = birkaç metre

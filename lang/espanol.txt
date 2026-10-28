@@ -20,8 +20,8 @@ On turns the map so the main street grid runs along the tiles - no staircase roa
 3 m per tile = 3 m por mosaico
 3. Buildings = 3. Edificios
 4 m per tile = 4 m por mosaico
-4. Compile = 4. Compilar
-5. Install = 5. Instalar
+5. Compile = 5. Compilar
+6. Install = 6. Instalar
 6 m per tile = 6 m por mosaico
 8 m per tile (whole regions) = 8 m por mosaico (regiones completas)
 a few metres = unos pocos metros

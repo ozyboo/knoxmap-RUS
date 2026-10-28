@@ -401,37 +401,15 @@
       <button id="buildingsBtn" class="btn">Build</button>
       <button class="btn btn-stop" data-stop hidden>Stop</button>
     </li>
-    <li class="pipe-card" data-step="compile">
+    <li class="pipe-card" data-step="place">
       <div class="pipe-body">
-        <div class="pipe-title">4. Compile</div>
-        <span id="compileNote" class="step-note">Turns the map into the game's files.
-          Takes a few minutes.</span>
-        <div class="bar"><div id="compileBar" class="bar-fill"></div></div>
-        <button id="retryCellsBtn" class="btn btn-small" hidden>Compile the cells that failed</button>
-        <details class="manual-fallback">
-          <summary>Or do it yourself in WorldEd</summary>
-          <button id="worldedBtn" class="btn btn-small" disabled>Open in WorldEd</button>
-          <span id="worldedNote" class="step-note">Then
-            <b>File → BMP To TMX → All Cells…</b> and
-            <b>File → Generate Lots 8x8 → All Cells…</b></span>
-        </details>
-      </div>
-      <button id="compileBtn" class="btn" disabled>Compile</button>
-      <button class="btn btn-stop" data-stop hidden>Stop</button>
-    </li>
-    <li class="pipe-card" data-step="install">
-      <div class="pipe-body">
-        <div class="pipe-title">5. Install</div>
-        <div class="install-row">
-          <label>Name in game <input type="text" id="mapTitle"/></label>
-          <label>Mod id <input type="text" id="modId"/></label>
-        </div>
+        <div class="pipe-title">4. Place on the world map <span class="step-note">optional</span></div>
         <!-- Where the map stands in the world every installed map shares.
              Picked here rather than packed in automatically
              (knoxbuild/placement.py). -->
-        <details id="placePanel">
-          <summary>Where it goes on the world map
-            <span class="count" id="placeWhere"></span></summary>
+        <div id="placePanel">
+          <div class="place-where">Where it goes
+            <span class="count" id="placeWhere"></span></div>
           <p class="hint">Knox County sits in the corner of the world, and
             every map you install shares that grid. Click to put yours
             somewhere else - north of the vanilla map, far out on its own, or
@@ -446,8 +424,18 @@
             again if it will not load. Untick it to put the map back on the shared
             world, and over Knox County if you like: a map put on top of Knox County
             replaces the vanilla cells under it.</p>
-          <canvas id="placeCanvas" width="720" height="470"
+          <canvas id="placeCanvas" width="720" height="470" tabindex="0"
                   aria-label="The world, with Knox County and your map on it"></canvas>
+          <div class="place-row">
+            <button type="button" id="placeZoomOut" class="btn btn-small"
+                    title="Zoom out (minus key)">−</button>
+            <button type="button" id="placeZoomIn" class="btn btn-small"
+                    title="Zoom in (plus key, or the mouse wheel)">+</button>
+            <button type="button" id="placeZoomFit" class="btn btn-small"
+                    title="Show the whole world (0)">Whole world</button>
+            <span class="hint">Wheel or + and − to zoom, middle mouse button to
+              drag the view.</span>
+          </div>
           <div class="place-row">
             <label>Cell <input type="number" id="placeX" min="0" max="400">
               , <input type="number" id="placeY" min="0" max="400"></label>
@@ -474,7 +462,34 @@
               Make the road map</button>
           </div>
           <div id="placeNote" class="hint"></div>
+        </div>
+      </div>
+    </li>
+    <li class="pipe-card" data-step="compile">
+      <div class="pipe-body">
+        <div class="pipe-title">5. Compile</div>
+        <span id="compileNote" class="step-note">Turns the map into the game's files.
+          Takes a few minutes.</span>
+        <div class="bar"><div id="compileBar" class="bar-fill"></div></div>
+        <button id="retryCellsBtn" class="btn btn-small" hidden>Compile the cells that failed</button>
+        <details class="manual-fallback">
+          <summary>Or do it yourself in WorldEd</summary>
+          <button id="worldedBtn" class="btn btn-small" disabled>Open in WorldEd</button>
+          <span id="worldedNote" class="step-note">Then
+            <b>File → BMP To TMX → All Cells…</b> and
+            <b>File → Generate Lots 8x8 → All Cells…</b></span>
         </details>
+      </div>
+      <button id="compileBtn" class="btn" disabled>Compile</button>
+      <button class="btn btn-stop" data-stop hidden>Stop</button>
+    </li>
+    <li class="pipe-card" data-step="install">
+      <div class="pipe-body">
+        <div class="pipe-title">6. Install</div>
+        <div class="install-row">
+          <label>Name in game <input type="text" id="mapTitle"/></label>
+          <label>Mod id <input type="text" id="modId"/></label>
+        </div>
         <span id="installNote" class="step-note">Copies the map into your Zomboid mods folder.</span>
       </div>
       <button id="installBtn" class="btn" disabled>Install</button>
