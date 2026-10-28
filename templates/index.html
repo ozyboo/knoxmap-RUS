@@ -567,7 +567,10 @@
       <select id="bdStyle"></select></label>
     <span class="board-spacer"></span>
     <button type="button" id="bdFill" class="btn">Lay it out for me</button>
-    <button type="button" id="bdUndo" class="btn" disabled>Undo</button>
+    <button type="button" id="bdCopyUp" class="btn"
+            title="Copy this floor onto the one above it">Copy floor up</button>
+    <button type="button" id="bdUndo" class="btn" disabled title="Ctrl+Z">Undo</button>
+    <button type="button" id="bdRedo" class="btn" disabled title="Ctrl+Shift+Z">Redo</button>
     <button type="button" id="bdClear" class="btn">Clear</button>
     <button type="button" id="bdSave" class="btn btn-primary">Save as preset</button>
     <button type="button" id="bdClose" class="btn">Close</button>
@@ -577,15 +580,19 @@
       <p class="hint">Pick a room, then drag across the plan to draw it.
         Drawing over a room takes that much of it away; the eraser cuts the
         shape of the building. To change a room you have already drawn, take
-        the adjust tool and drag its edge.</p>
+        the adjust tool and drag its edge; a room you have taken hold of can then
+        be moved with the arrow keys, copied with Ctrl+D or removed with
+        Delete. Ctrl+Z undoes, Ctrl+Shift+Z redoes.</p>
       <input type="search" id="bdFind" class="list-search" hidden
              autocomplete="off" placeholder="Search the rooms">
       <div id="bdRooms" class="sketch-palette"></div>
     </aside>
     <div class="builder-sheet">
-      <div class="builder-storeys" id="bdStoreyTabs"></div>
+      <div class="builder-storeys"><span id="bdStoreyTabs" class="kd-bar"></span>
+        <span class="hint" id="bdHover"></span></div>
       <div class="builder-plan" id="bdPlan">
         <img id="bdImage" alt="The plan of this building">
+        <div id="bdSelBox" hidden></div>
         <div id="bdDrag" hidden></div>
         <p class="hint builder-empty" id="bdEmpty">Nothing drawn yet. Pick a
           room and drag a rectangle, or let the generator lay one out for you

@@ -3702,7 +3702,12 @@ let bdDesign = null;            // what is drawn
 let bdLevel = 0;                // the storey being drawn
 let bdRoom = '';                // the picked room ('' is the eraser)
 let bdHistory = [];
+let bdFuture = [];              // what Redo brings back
 let bdBusy = false;
+// The picked room, by where it is rather than by its place in the list: the
+// server hands the design back cleaned up, so an index does not survive a
+// round trip but a rectangle on a storey does.
+let bdSel = null;               // {level, x, y, w, h} or null
 
 function bdNote(text) {
   const box = document.getElementById('bdNote');
@@ -3879,7 +3884,108 @@ function bdApplyEdit(idx, rect) {
   next.rooms.splice(idx, 1);
   next.rooms.push({ level: room.level, x: rect.x, y: rect.y,
                     w: rect.w, h: rect.h, kind: room.kind });
+  bdSel = { level: room.level, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
   bdRefresh(next);
+}
+
+function bdSelIndex() {
+  if (!bdSel || !bdDesign) return -1;
+  const rooms = bdDesign.rooms || [];
+  for (let i = rooms.length - 1; i >= 0; i -= 1) {
+    const r = rooms[i];
+    if (r.level === bdSel.level && r.x === bdSel.x && r.y === bdSel.y
+        && r.w === bdSel.w && r.h === bdSel.h) return i;
+  }
+  return -1;
+}
+
+function bdRoomLabel(id) {
+  const found = ((bdMeta && bdMeta.rooms) || []).find(r => r.id === id);
+  return found ? found.label : (id || 'Cut away');
+}
+
+// A box over the plan in tile coordinates; shared by the drag outline and the
+// outline of the picked room.
+function bdPlaceBox(el, x0, y0, w, h) {
+  const plan = document.getElementById('bdPlan');
+  const img = document.getElementById('bdImage');
+  const box = img.getBoundingClientRect();
+  if (!bdDesign || !box.width) { el.hidden = true; return; }
+  const plot = plan.getBoundingClientRect();
+  const tw = box.width / bdDesign.width;
+  const th = box.height / bdDesign.height;
+  el.hidden = false;
+  el.style.left = `${box.left - plot.left + x0 * tw}px`;
+  el.style.top = `${box.top - plot.top + y0 * th}px`;
+  el.style.width = `${w * tw}px`;
+  el.style.height = `${h * th}px`;
+}
+
+function bdShowSel() {
+  const el = document.getElementById('bdSelBox');
+  const i = bdSelIndex();
+  if (i < 0 || bdSel.level !== bdLevel) {
+    if (i < 0) bdSel = null;
+    el.hidden = true;
+    return;
+  }
+  bdPlaceBox(el, bdSel.x, bdSel.y, bdSel.w, bdSel.h);
+}
+
+function bdSelect(room) {
+  bdSel = room ? { level: room.level, x: room.x, y: room.y, w: room.w, h: room.h } : null;
+  bdShowSel();
+  if (room) {
+    bdNote(`${bdRoomLabel(room.kind)}, ${room.w}×${room.h} tiles. Arrow keys move it `
+      + '(Shift for five tiles), Delete removes it, Ctrl+D copies it, Escape lets go.');
+  }
+}
+
+function bdDeleteSel() {
+  const i = bdSelIndex();
+  if (i < 0 || bdBusy) return;
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  next.rooms.splice(i, 1);
+  bdSel = null;
+  bdRefresh(next);
+}
+
+function bdDuplicateSel() {
+  const i = bdSelIndex();
+  if (i < 0 || bdBusy) return;
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  const r = next.rooms[i];
+  const at = bdResized(r, '', 2, 2);
+  next.rooms.push({ level: r.level, x: at.x, y: at.y, w: at.w, h: at.h, kind: r.kind });
+  bdSel = { level: r.level, ...at };
+  bdRefresh(next);
+}
+
+function bdNudgeSel(dx, dy) {
+  const i = bdSelIndex();
+  if (i < 0 || bdBusy) return;
+  const r = bdDesign.rooms[i];
+  const to = bdResized(r, '', dx, dy);
+  if (to.x === r.x && to.y === r.y) return;
+  bdApplyEdit(i, to);
+}
+
+// Copy this floor onto the one above it, adding the floor if there is not one.
+function bdCopyFloorUp() {
+  if (!bdDesign || bdBusy) return;
+  const to = bdLevel + 1;
+  if (to >= 8) { bdNote('That is the top: a building has up to eight storeys.'); return; }
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  if (to >= next.storeys) next.storeys = to + 1;
+  const copy = next.rooms.filter(r => r.level === bdLevel)
+    .map(r => ({ ...r, level: to }));
+  next.rooms = next.rooms.filter(r => r.level !== to).concat(copy);
+  bdSel = null;
+  bdRefresh(next, to);
+  bdNote(`This floor copied up to ${to === 0 ? 'the ground floor' : 'floor ' + to}.`);
 }
 
 function bdRoomsMarkup() {
@@ -3967,7 +4073,9 @@ function bdShow(data) {
   if (data.image) img.src = data.image;
   document.getElementById('bdEmpty').hidden = data.painted > 0;
   document.getElementById('bdUndo').disabled = !bdHistory.length;
+  document.getElementById('bdRedo').disabled = !bdFuture.length;
   drawBdStoreys();
+  bdShowSel();
   bdFields();
 
   const tally = document.getElementById('bdTally');
@@ -4014,6 +4122,21 @@ async function bdRefresh(design, level) {
 function bdRemember() {
   bdHistory.push(JSON.stringify(bdDesign));
   if (bdHistory.length > 40) bdHistory.shift();
+  bdFuture = [];              // a new change ends the road forward
+}
+
+function bdUndo() {
+  const was = bdHistory.pop();
+  if (!was || bdBusy) { if (was) bdHistory.push(was); return; }
+  bdFuture.push(JSON.stringify(bdDesign));
+  bdRefresh(JSON.parse(was));
+}
+
+function bdRedo() {
+  const next = bdFuture.pop();
+  if (!next || bdBusy) { if (next) bdFuture.push(next); return; }
+  bdHistory.push(JSON.stringify(bdDesign));
+  bdRefresh(JSON.parse(next));
 }
 
 function bdDraw(x0, y0, x1, y1) {
@@ -4036,7 +4159,9 @@ async function bdStart() {
     bdDesign = { name: '', kind: '', style: '', width: 20, height: 16,
                  storeys: 1, rooms: [] };
     bdHistory = [];
+    bdFuture = [];
   }
+  bdSel = null;
   drawBdRooms();
   await bdRefresh(bdDesign, 0);
   bdNote('Pick a room, then drag a rectangle on the plan. Adjust rooms moves the walls of one already drawn.');
@@ -4048,6 +4173,8 @@ async function bdOpenSaved(name) {
     const out = await res.json();
     if (!res.ok) throw bdApiError(out, res);
     bdHistory = [];
+    bdFuture = [];
+    bdSel = null;
     bdShow(out);
     await bdLoad(out.design.kind || '');
     drawBdRooms();
@@ -4091,6 +4218,7 @@ document.getElementById('bdRooms').addEventListener('click', ev => {
 document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
   const btn = ev.target.closest('[data-storey]');
   if (btn) bdRefresh(bdDesign, parseInt(btn.dataset.storey, 10));
+  bdShowSel();
 });
 
 // Dragging a rectangle on the plan. The outline follows the pointer as a box
@@ -4103,16 +4231,9 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
   let grab = null;                // the room being adjusted, and where by
 
   function placeBox(x0, y0, w, h) {
-    const img = document.getElementById('bdImage');
-    const box = img.getBoundingClientRect();
-    const plot = plan.getBoundingClientRect();
-    const tw = box.width / bdDesign.width;
-    const th = box.height / bdDesign.height;
-    ghost.hidden = false;
-    ghost.style.left = `${box.left - plot.left + x0 * tw}px`;
-    ghost.style.top = `${box.top - plot.top + y0 * th}px`;
-    ghost.style.width = `${w * tw}px`;
-    ghost.style.height = `${h * th}px`;
+    bdPlaceBox(ghost, x0, y0, w, h);
+    // How big it is, as it is dragged: tiles are what the sheet is measured in.
+    ghost.dataset.size = `${w} × ${h}`;
   }
 
   function place(a, b) {
@@ -4136,6 +4257,7 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
                + 'that wall, its middle to move the room.');
         return;
       }
+      bdSelect(found.r);
       grab = { idx: found.i, r: found.r, at,
                edge: bdGrip(found.r, at.x, at.y) };
       placeBox(found.r.x, found.r.y, found.r.w, found.r.h);
@@ -4147,6 +4269,13 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
 
   // What the pointer would take hold of, before it does.
   plan.addEventListener('pointermove', ev => {
+    const hover = document.getElementById('bdHover');
+    const here = bdDesign && bdTileAt(ev);
+    if (here) {
+      const found = bdRoomAt(here.x, here.y);
+      hover.textContent = `${here.x}, ${here.y}`
+        + (found ? ` · ${bdRoomLabel(found.r.kind)} ${found.r.w}×${found.r.h}` : '');
+    }
     if (grab || from || !bdDesign) return;
     if (bdMode !== 'adjust') { plan.style.cursor = ''; return; }
     const at = bdTileAt(ev);
@@ -4193,12 +4322,33 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
     from = null;
     bdDraw(started.x, started.y, now.x, now.y);
   });
+  window.addEventListener('resize', bdShowSel);
   window.addEventListener('pointercancel', () => {
     from = null;
     grab = null;
     ghost.hidden = true;
   });
 })();
+
+document.addEventListener('keydown', ev => {
+  if (document.getElementById('builder').hidden) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName || '')) return;
+  const mod = ev.ctrlKey || ev.metaKey;
+  const key = ev.key.toLowerCase();
+  if (mod && key === 'z') { ev.preventDefault(); if (ev.shiftKey) bdRedo(); else bdUndo(); }
+  else if (mod && key === 'y') { ev.preventDefault(); bdRedo(); }
+  else if (mod && key === 'd') { ev.preventDefault(); bdDuplicateSel(); }
+  else if (ev.key === 'Escape') { bdSelect(null); }
+  else if ((ev.key === 'Delete' || ev.key === 'Backspace') && bdSel) {
+    ev.preventDefault();
+    bdDeleteSel();
+  } else if (bdSel && ev.key.startsWith('Arrow')) {
+    ev.preventDefault();
+    const n = ev.shiftKey ? 5 : 1;
+    bdNudgeSel(ev.key === 'ArrowLeft' ? -n : ev.key === 'ArrowRight' ? n : 0,
+               ev.key === 'ArrowUp' ? -n : ev.key === 'ArrowDown' ? n : 0);
+  }
+});
 
 for (const id of ['bdWidth', 'bdHeight', 'bdStoreys']) {
   document.getElementById(id).addEventListener('change', () => {
@@ -4253,11 +4403,9 @@ document.getElementById('bdFill').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('bdUndo').addEventListener('click', () => {
-  const was = bdHistory.pop();
-  if (!was) return;
-  bdRefresh(JSON.parse(was));
-});
+document.getElementById('bdUndo').addEventListener('click', bdUndo);
+document.getElementById('bdRedo').addEventListener('click', bdRedo);
+document.getElementById('bdCopyUp').addEventListener('click', bdCopyFloorUp);
 
 document.getElementById('bdClear').addEventListener('click', () => {
   if (!bdDesign) return;
