@@ -81,6 +81,12 @@ def api_placement(name: str):
         return jsonify(out)
     body = _json_body()
     try:
+        if "standalone" in body and body.get("cell_x") is None:
+            done = P.set_standalone(str(map_dir), map_dir.name,
+                                    body.get("standalone") is True)
+            out = P.layout(str(map_dir), map_dir.name)
+            out["moved"] = done
+            return jsonify(out)
         done = P.move(str(map_dir), map_dir.name,
                       (body.get("cell_x"), body.get("cell_y")))
     except ValueError as exc:

@@ -4532,9 +4532,22 @@ function placeClashes(corner) {
                  w: placeWorld.map.w * k, h: placeWorld.map.h * k };
   const names = new Set();
   for (const rect of placeOtherRects()) {
+    // Knox County under the map is not a clash: it is what the map replaces.
+    if (rect.kind === 'vanilla') continue;
     if (hits(mine, rect)) names.add(rect.name);
   }
   return [...names];
+}
+
+// The vanilla cells this map would stand on, which it replaces. A standalone
+// map has no vanilla world to replace.
+function placeReplaces(corner) {
+  if (!placeWorld || placeWorld.standalone) return [];
+  const k = placeTiles();
+  const mine = { x: corner.x * k, y: corner.y * k,
+                 w: placeWorld.map.w * k, h: placeWorld.map.h * k };
+  return placeOtherRects().some(r => r.kind === 'vanilla' && hits(mine, r))
+    ? [placeWorld.vanilla.name] : [];
 }
 
 function drawWorld() {
@@ -4633,6 +4646,8 @@ function placeSummary() {
 function placeFields() {
   const mine = placePicked || (placeWorld && placeWorld.map);
   if (!mine) return;
+  const box = document.getElementById('placeStandalone');
+  if (box && placeWorld) box.checked = !!placeWorld.standalone;
   document.getElementById('placeX').value = mine.x;
   document.getElementById('placeY').value = mine.y;
   placeSummary();
@@ -4645,12 +4660,18 @@ function placeState() {
   const tiles = placeTiles();
   const where = `Cell ${mine.x},${mine.y} - world tile `
     + `${mine.x * tiles},${mine.y * tiles}.`;
+  const replaces = placeReplaces(mine);
   if (clash.length) {
     placeNote(`${where} It would sit on top of ${clash.join(' and ')}, and the `
       + 'game would read one map’s cells for the other.', true);
   } else if (!placeWorld.lotsMatch) {
     placeNote(`${where} The map has moved since it was compiled - compile it `
       + 'again before installing.', true);
+  } else if (placeWorld.standalone) {
+    placeNote(`${where} Standalone: the whole world is this map.`);
+  } else if (replaces.length) {
+    placeNote(`${where} This replaces the ${replaces[0]} cells under it. Load the `
+      + 'map ahead of Muldraugh, KY: SERVER SETUP.txt has the lines.');
   } else {
     placeNote(where);
   }
@@ -4800,6 +4821,11 @@ document.getElementById('placeApply').addEventListener('click', () => {
   if (!mine) return;
   putMapAt({ method: 'POST', headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ cell_x: mine.x, cell_y: mine.y }) });
+});
+
+document.getElementById('placeStandalone').addEventListener('change', e => {
+  putMapAt({ method: 'POST', headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ standalone: e.target.checked }) });
 });
 
 document.getElementById('placeAuto').addEventListener('click', () =>
