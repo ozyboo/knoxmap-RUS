@@ -93,6 +93,13 @@ class BuildingAlignment(unittest.TestCase):
         self.assertEqual(reason, "ok")
         self.assertIsNotNone(footprint)
 
+    def test_rectilinear_is_the_default_alignment(self):
+        self.assertEqual(Settings().building_alignment, "rectilinear")
+        self.assertEqual(Settings.from_dict({}).building_alignment, "rectilinear")
+        self.assertEqual(Settings.from_dict({"preset": "city"}).building_alignment, "rectilinear")
+        self.assertEqual(Settings.from_dict({"building_alignment": "real"}).building_alignment,
+                         "real")
+
     def test_legacy_angle_settings_migrate(self):
         self.assertEqual(Settings.from_dict({"square_buildings": 0}).building_alignment,
                          "real")

@@ -46,6 +46,21 @@ class RoofLayouts(unittest.TestCase):
         alone = tbx._roof_pieces(layout.roof_rects([[1] * 11 for _ in range(12)]), True, True)
         self.assertTrue(any(k.startswith("Peak30") for k, *_ in alone), alone)
 
+    def test_tiny_pieces_of_a_many_wing_footprint_stay_flat(self):
+        # A staircase of 2x2 steps: many small rectangles, none worth a gable of its own.
+        grid = [[0] * 12 for _ in range(12)]
+        for i in range(6):
+            for y in range(2 * i, 2 * i + 2):
+                for x in range(2 * i, 12):
+                    grid[y][x] = 1
+        pieces = tbx._roof_pieces(layout.roof_rects(grid), True, True)
+        small = [k for k, _d, _c, (_x, _y, w, h) in pieces if w * h < tbx.MANY_WING_MIN_PITCHED_AREA]
+        self.assertTrue(len(pieces) >= tbx.MANY_WING_RECTS and small)
+        self.assertEqual(set(small), {"FlatTop"})
+        # One small house on its own keeps its gable.
+        alone = tbx._roof_pieces(layout.roof_rects([[1] * 3 for _ in range(2)]), True, True)
+        self.assertNotEqual(alone[0][0], "FlatTop")
+
 
 if __name__ == "__main__":
     unittest.main()
