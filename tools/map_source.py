@@ -29,7 +29,7 @@ from knoxbuild.buildtiles import compose_lots, parse_tbx, tile_name  # noqa: E40
 from knoxbuild.kcell import SIDE, cell_source  # noqa: E402
 from knoxbuild.rules import load_rules  # noqa: E402
 from knoxbuild.terrain import Palette, ground_layers, stack_order  # noqa: E402
-from tools.terrain_source import ORIGIN_X, rules_path  # noqa: E402
+from tools.terrain_source import ORIGIN_X, project_origin, rules_path  # noqa: E402
 
 
 def read_lots(project: str):
@@ -73,6 +73,8 @@ def _row(project: str, out: str, cy: int, band: list[tuple], placed, seed: int, 
     land_path = os.path.join(project, f"{name}.bmp")
     veg_path = os.path.join(project, f"{name}_veg.bmp")
     w, h = size
+    origin = project_origin(project)
+    ox, oy = origin
     rules_file = rules_path()
     rules = load_rules(rules_file)
     blends = load_blends(os.path.join(os.path.dirname(rules_file), "Blends.txt"))
@@ -89,12 +91,12 @@ def _row(project: str, out: str, cy: int, band: list[tuple], placed, seed: int, 
     del parsed
     pal = Palette()
     written = 0
-    wy0 = cy * SIDE
+    wy0 = cy * SIDE - oy
     y_lo, y_hi = max(wy0 - 1, 0), min(wy0 + SIDE + 1, h)
     land_strip = bitmaps.read_rgb_rows(land_path, y_lo, y_hi, w)
     veg_strip = bitmaps.read_rgb_rows(veg_path, y_lo, y_hi, w)
-    for cx in range(ORIGIN_X // SIDE, (ORIGIN_X + w - 1) // SIDE + 1):
-        wx0 = cx * SIDE - ORIGIN_X
+    for cx in range(ox // SIDE, (ox + w - 1) // SIDE + 1):
+        wx0 = cx * SIDE - ox
         win = SIDE + 2
         lw = np.zeros((win, win, 3), np.uint8)
         vg = np.zeros((win, win, 3), np.uint8)
@@ -145,7 +147,7 @@ def _row(project: str, out: str, cy: int, band: list[tuple], placed, seed: int, 
                     i = index[t] = len(names) + 1
                     names.append(t)
                 arrays[z][k][yy, xx] = i
-        rooms, buildings = cell_tables(cx, cy, placed)
+        rooms, buildings = cell_tables(cx, cy, placed, origin)
         room_tuples = [(r["name"], r["z"], [tuple(x) for x in r["rects"]], []) for r in rooms]
         data = cell_source(cx, cy, names, arrays, rooms=room_tuples, buildings=buildings)
         with open(os.path.join(out, f"cell_{cx}_{cy}.kcell"), "wb") as f:
@@ -173,10 +175,13 @@ def make_map_source(project: str, out: str, seed: int = 1, seams: bool = False,
 
     if on_start:
         on_start()
-    rows = (h + SIDE - 1) // SIDE
+    origin = project_origin(project)
+    cys = list(range(origin[1] // SIDE, (origin[1] + h - 1) // SIDE + 1))
+    rows = len(cys)
     bands = []
-    for cy in range(rows):
-        lo, hi = cy * SIDE - MARGIN, cy * SIDE + SIDE + MARGIN
+    for cy in cys:
+        lo = cy * SIDE - origin[1] - MARGIN
+        hi = cy * SIDE - origin[1] + SIDE + MARGIN
         bands.append([(t, tx, ty, lv) for (t, tx, ty, lv, _w, _h), (_bw, bh) in zip(lots, reach)
                       if ty - MARGIN < hi and ty + bh + MARGIN > lo])
     os.makedirs(out, exist_ok=True)
@@ -184,16 +189,16 @@ def make_map_source(project: str, out: str, seed: int = 1, seams: bool = False,
         workers = max(1, min(os.cpu_count() or 1, int(_free_gb() // 2) or 1))
     written = 0
     if workers == 1:
-        for cy in range(rows):
+        for i, cy in enumerate(cys):
             if should_stop and should_stop():
                 raise knoxstop.Stopped("the compile")
-            written += _row(project, out, cy, bands[cy], placed, seed, seams, (w, h))
+            written += _row(project, out, cy, bands[i], placed, seed, seams, (w, h))
             if on_row:
-                on_row(cy + 1, rows)
+                on_row(i + 1, rows)
     else:
         with futures.ProcessPoolExecutor(max_workers=workers) as pool:
-            jobs = [pool.submit(_row, project, out, cy, bands[cy], placed, seed, seams, (w, h))
-                    for cy in range(rows)]
+            jobs = [pool.submit(_row, project, out, cy, bands[i], placed, seed, seams, (w, h))
+                    for i, cy in enumerate(cys)]
             try:
                 for n, fut in enumerate(futures.as_completed(jobs), 1):
                     written += fut.result()
@@ -207,7 +212,8 @@ def make_map_source(project: str, out: str, seed: int = 1, seams: bool = False,
                 raise
     name = os.path.basename(os.path.normpath(project))
     spawn = f"{name}_ZombieSpawnMap.bmp"
-    lines = ["format = knoxlots-source 1", f"origin_x = {ORIGIN_X}", "origin_y = 0"]
+    lines = ["format = knoxlots-source 1", f"origin_x = {origin[0]}",
+             f"origin_y = {origin[1]}"]
     if os.path.exists(os.path.join(project, spawn)):
         shutil.copy2(os.path.join(project, spawn), os.path.join(out, "spawn.bmp"))
         lines.append("spawn_map = spawn.bmp")

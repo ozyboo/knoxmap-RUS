@@ -140,12 +140,13 @@ def placed_rooms(lots) -> list[tuple[int, int, list[dict]]]:
     return out
 
 
-def cell_tables(cell_x: int, cell_y: int, placed: list[tuple[int, int, list[dict]]]) -> tuple[list[dict], list[list[int]]]:
+def cell_tables(cell_x: int, cell_y: int, placed: list[tuple[int, int, list[dict]]],
+                origin: tuple[int, int] = (ORIGIN_X, 0)) -> tuple[list[dict], list[list[int]]]:
     """(rooms, buildings) of one cell. `placed` holds, for each building in project order,
     (x, y, room entries): the world tile of its north-west corner and its rooms in world
     coordinates (from building_rooms). A building is listed in the cell that holds its
     north-west corner, with every rectangle whole, even where it runs past the cell's edge."""
-    x0, y0 = cell_x * CELL - ORIGIN_X, cell_y * CELL
+    x0, y0 = cell_x * CELL - origin[0], cell_y * CELL - origin[1]
     rooms: list[dict] = []
     buildings: list[list[int]] = []
     # By source cell, row by row (the project file lists them column by column), then in the

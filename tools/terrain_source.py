@@ -31,6 +31,28 @@ from knoxbuild.rules import load_rules  # noqa: E402
 from knoxbuild.terrain import Palette, ground_layers, stack_order  # noqa: E402
 
 ORIGIN_X = 70 * 300       # the world's west edge in lot-file tiles (worldOrigin 70,0)
+CELL_TILES = 300          # a worldOrigin is in cells of this many tiles
+
+
+def project_origin(project: str) -> tuple[int, int]:
+    """Where the world's north-west corner is for this map, in tiles: the
+    worldOrigin in its .pzw, which is where the map was placed (placement.py).
+    Compiling used to assume 70,0 whatever the file said, so a map put anywhere
+    else was compiled into cells named for 70,0 and then refused at install
+    for having been moved."""
+    import re
+
+    name = os.path.basename(os.path.normpath(project))
+    try:
+        with open(os.path.join(project, f"{name}.pzw"), encoding="utf-8",
+                  errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return ORIGIN_X, 0
+    m = re.search(r'<worldOrigin origin="(-?\d+),(-?\d+)"', head)
+    if not m:
+        return ORIGIN_X, 0
+    return int(m.group(1)) * CELL_TILES, int(m.group(2)) * CELL_TILES
 
 
 def rules_path() -> str:
@@ -59,17 +81,18 @@ def _rules_and_blends(rules_file: str):
 
 def _one_row(job: tuple) -> int:
     """All the cells in one row of cells; returns how many were written."""
-    land_path, veg_path, out, cy, w, h, seed, rules_file, seams = job
+    land_path, veg_path, out, cy, w, h, seed, rules_file, seams, origin = job
+    ox, oy = origin
     rules, blends = _rules_and_blends(rules_file)
     pal = Palette()
-    wy0 = cy * SIDE
+    wy0 = cy * SIDE - oy
     y_lo, y_hi = max(wy0 - 1, 0), min(wy0 + SIDE + 1, h)
     # the whole width of the strip once; cells are cut from it
     land_strip = bitmaps.read_rgb_rows(land_path, y_lo, y_hi, w)
     veg_strip = bitmaps.read_rgb_rows(veg_path, y_lo, y_hi, w)
     n = 0
-    for cx in range(ORIGIN_X // SIDE, (ORIGIN_X + w - 1) // SIDE + 1):
-        wx0 = cx * SIDE - ORIGIN_X          # the cell's west edge in picture pixels
+    for cx in range(ox // SIDE, (ox + w - 1) // SIDE + 1):
+        wx0 = cx * SIDE - ox                # the cell's west edge in picture pixels
         win = SIDE + 2                      # the cell and one square all round it
         lw = np.zeros((win, win, 3), np.uint8)
         vg = np.zeros((win, win, 3), np.uint8)
@@ -112,8 +135,9 @@ def make_sources(project: str, out: str, seed: int = 1, rules_file: str | None =
     w, h = head[0], head[1]
     rules_file = rules_file or rules_path()
     os.makedirs(out, exist_ok=True)
-    jobs = [(land_path, veg_path, out, cy, w, h, seed, rules_file, seams)
-            for cy in range((h + SIDE - 1) // SIDE)]
+    origin = project_origin(project)
+    jobs = [(land_path, veg_path, out, cy, w, h, seed, rules_file, seams, origin)
+            for cy in range(origin[1] // SIDE, (origin[1] + h - 1) // SIDE + 1)]
     workers = workers if workers is not None else max(1, min((os.cpu_count() or 2) - 1, 8))
     n = 0
     if workers <= 1 or len(jobs) == 1:
@@ -128,7 +152,8 @@ def make_sources(project: str, out: str, seed: int = 1, rules_file: str | None =
                 if progress:
                     progress(n)
     spawn = f"{name}_ZombieSpawnMap.bmp"
-    lines = ["format = knoxlots-source 1", f"origin_x = {ORIGIN_X}", "origin_y = 0"]
+    lines = ["format = knoxlots-source 1", f"origin_x = {origin[0]}",
+             f"origin_y = {origin[1]}"]
     if os.path.exists(os.path.join(project, spawn)):
         shutil.copy2(os.path.join(project, spawn), os.path.join(out, "spawn.bmp"))
         lines.append("spawn_map = spawn.bmp")
