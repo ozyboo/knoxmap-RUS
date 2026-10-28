@@ -34,12 +34,16 @@ ORIGIN_X = 70 * 300       # the world's west edge in lot-file tiles (worldOrigin
 
 
 def rules_path() -> str:
-    tools = knoxpaths.tools_dir() if hasattr(knoxpaths, "tools_dir") else None
-    for base in (tools, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                     "vendor", "PZMappingTools")):
-        if base and os.path.exists(os.path.join(base, "config", "Rules.txt")):
-            return os.path.join(base, "config", "Rules.txt")
-    raise FileNotFoundError("Rules.txt not found")
+    # knoxpaths.mapping_tools_dir() is the one place that knows where the map
+    # tools are: the PZ_MAPPING_TOOLS variable, knoxmap_config.json, vendor/,
+    # or a PZMappingTools folder beside KnoxMap. Only looking in vendor/ failed
+    # with "Rules.txt not found" for anybody whose tools live anywhere else.
+    tools = knoxpaths.mapping_tools_dir()
+    if tools and os.path.exists(os.path.join(tools, "config", "Rules.txt")):
+        return os.path.join(tools, "config", "Rules.txt")
+    raise FileNotFoundError(
+        "Rules.txt not found" + (f" in {tools}" if tools else
+                                 ": the map tools (PZMappingTools) are not installed"))
 
 
 _LOADED: dict = {}
