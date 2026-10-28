@@ -937,7 +937,8 @@ def _dense(check, work, renderer, build, Settings) -> None:
     check_lots_apart(check, laid_out, name="dense")
 
     with contextlib.redirect_stdout(io.StringIO()):
-        build(laid_out, settings=Settings(seed=1, true_map=0))
+        build(laid_out, settings=Settings(seed=1, true_map=0,
+                                          building_alignment="smart"))
     with open(os.path.join(laid_out, "dense_placements.csv"), encoding="utf-8") as f:
         again = list(_csv.DictReader(f))
     check([r["file"] for r in again] == [r["file"] for r in laid_rows],
