@@ -83,11 +83,11 @@ def stamp(map_dir: str, stage: str, version: str | None = None) -> None:
         pass          # a map whose stamp cannot be written still works
 
 
-def record_install(map_dir: str, mod_root: str, mod_id: str) -> None:
+def record_install(map_dir: str, mod_root: str, mod_id: str, title: str = "") -> None:
     """Remember which mod folder this map was installed into, so the window can
     show it, check it is current and take it out again."""
     state = read(map_dir)
-    state["installed"] = {"modRoot": mod_root, "modId": mod_id,
+    state["installed"] = {"modRoot": mod_root, "modId": mod_id, "title": title,
                           "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     try:
         knoxfiles.write(_path(map_dir), state, indent=2)

@@ -1255,9 +1255,34 @@ async function loadMaps() {
       remove.type = 'button';
       remove.textContent = 'Uninstall';
       remove.addEventListener('click', () => uninstallMap(m.mapName));
-      li.append(remove);
+      const update = document.createElement('button');
+      update.type = 'button';
+      update.textContent = 'Update';
+      update.title = 'Install the latest compile over the installed copy';
+      if (!m.installed.upToDate) update.className = 'btn-primary';
+      update.addEventListener('click', () => updateMap(m.mapName, update));
+      li.append(update, remove);
     }
     list.append(li);
+  }
+}
+
+async function updateMap(mapName, btn) {
+  // The same install as the Install button, into the same mod folder under the
+  // same name; the copy already there is replaced.
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/install', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mapName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    fx.toast('ok', 'Updated in the game', `${mapName}: ${data.cells} cells`, 6000);
+    loadMaps();
+  } catch (err) {
+    fx.toast('bad', 'Could not update that map', err.message, 8000);
+    btn.disabled = false;
   }
 }
 
