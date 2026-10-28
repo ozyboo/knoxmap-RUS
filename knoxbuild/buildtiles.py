@@ -468,7 +468,7 @@ def compose_lots(lots) -> dict[tuple[int, int, int], list[str]]:
 
     Rooms replace earlier lot squares. Outside rooms, only populated layers replace
     matching earlier layers; empty squares preserve the underlying lot - except that an
-    earlier wall, fence, gate, railing or hedge is never replaced by a later lot's piece,
+    earlier wall, fence, gate, railing or hedge is not replaced by a later lot's prop,
     and a square holding one drops the lamps, trees, bushes and flowers on it.
     """
     world = {}
@@ -487,7 +487,11 @@ def compose_lots(lots) -> dict[tuple[int, int, int], list[str]]:
                     if "floor" in channels:     # a floor tile (a flat roof is one) takes the square
                         old = []
                     replaced = set().union(*(WALL_REPLACES.get(c, {c}) for c in channels)) if channels else set()
-                    keep = [(layer, tile) for layer, tile in old if layer not in replaced or _structure(tile)]
+                    # An earlier wall survives a later lot's prop on its square, but a later
+                    # lot's own wall replaces it, as WorldEd does where two buildings overlap.
+                    walled = any(_structure(tile) for _, tile in new)
+                    keep = [(layer, tile) for layer, tile in old
+                            if layer not in replaced or (_structure(tile) and not walled)]
                     world[pos] = keep + [item for item in new if item not in keep]
     out = {}
     for pos, items in world.items():
