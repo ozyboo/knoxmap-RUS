@@ -41,6 +41,19 @@ def sea_polygons(feats: list[OSMFeature], proj: Projector) -> list:
     pieces = [merged] if isinstance(merged, LineString) else list(getattr(merged, "geoms", []))
     far = 3 * (w + h)
     inner = frame.buffer(-1)
+    # Where two or more pieces meet - a shore that crosses itself, an island
+    # touching the mainland, two ways overlapping - the union has cut them at
+    # that point and they all end there. That is a junction, not a loose end:
+    # extending it fired a ray three map-widths long from every one, and a
+    # coast with many of them (an archipelago) came out as wedges of sea and
+    # land radiating across the whole map. Only an end nothing else meets is
+    # carried on.
+    meets: dict = {}
+    for line in pieces:
+        c = list(line.coords)
+        if len(c) >= 2 and c[0] != c[-1]:
+            for pt in (c[0], c[-1]):
+                meets[pt] = meets.get(pt, 0) + 1
     shores = []
     for line in pieces:
         coords = list(line.coords)
@@ -51,6 +64,8 @@ def sea_polygons(feats: list[OSMFeature], proj: Projector) -> list:
             continue
         for end, before in ((0, 1), (-1, -2)):
             ex, ey = coords[end]
+            if meets.get((ex, ey), 0) > 1:
+                continue
             if inner.contains(Point(ex, ey)):
                 bx, by = coords[before]
                 dx, dy = ex - bx, ey - by
