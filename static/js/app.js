@@ -86,9 +86,17 @@ function setSelection(layer) {
 map.on(L.Draw.Event.CREATED, (e) => {
   // The area selection and the drawing palette both finish a shape the same
   // way; which of them it belongs to is which of them armed the handler.
-  if (zoneTookShape(e.layer)) return;
+  if (zoneEd.claim(e.layer)) return;
   if (sketchEd.claim(e.layer)) return;
   setSelection(e.layer);
+});
+
+// One draw handler at a time on the world map: the area toolbar, the sketch
+// palette and the zone tool each arm one, and two armed at once would both
+// answer the same clicks. Whichever started last wins.
+map.on(L.Draw.Event.DRAWSTART, () => {
+  const mine = [sketchEd, zoneEd].find(e => e.kind);
+  for (const e of [sketchEd, zoneEd]) if (e !== mine) e.stop();
 });
 
 // ---- freehand lasso ---------------------------------------------------------------
@@ -2451,6 +2459,11 @@ function pollCompile() {
 // tag that is wrong draws a shape on the page that is missing from the map.
 const sketchLayer = new L.FeatureGroup().addTo(map);
 let sketchPalette = [];
+// The area toolbar's own handler, if one is armed, so a tool started from
+// somewhere else does not leave it listening as well.
+function disarmAreaToolbar() {
+  try { drawControl._toolbars.draw.disable(); } catch { /* nothing armed */ }
+}
 let refreshSketchTools = () => {};
 // The editor itself is static/js/draw.js, shared with the drawing board. It
 // does not listen for finished shapes here: the area selection above also
@@ -2465,6 +2478,7 @@ const sketchEd = KnoxDraw.create(map, {
   active: () => document.getElementById('sketch').open
                 && document.getElementById('board').hidden,
   listen: false,
+  onStart: () => { zoneEd.stop(); disarmAreaToolbar(); },
   onChange: () => { showSketchCount(); refreshSketchTools(); },
 });
 refreshSketchTools = KnoxDraw.toolbar(document.getElementById('sketchTools'), sketchEd);
@@ -3340,9 +3354,12 @@ document.getElementById('boardBuild').addEventListener('click', async () => {
 // read is a dial that does nothing.
 const zoneLayer = new L.FeatureGroup().addTo(map);
 let zoneMeta = null;            // {settings: [...], styles: [...]}
-let zoneList = [];              // [{name, ring, settings, wall_style, layer}]
+// [{name, ring, settings, wall_style, presets, layer}], always in the order of
+// the shapes on the map: the editor (static/js/draw.js) owns the shapes, and
+// each carries its zone as `layer.kdMeta`, so undo brings back a zone's
+// settings with its outline. zoneList is rebuilt from them (zonesSync).
+let zoneList = [];
 let zonePicked = -1;
-let zoneDrawer = null;
 
 const ZONE_STYLE = { color: '#8f7ad6', weight: 2, dashArray: '5,4', fillOpacity: 0.12 };
 const ZONE_PICKED = { color: '#c9a8ff', weight: 3, dashArray: null, fillOpacity: 0.25 };
@@ -3387,8 +3404,15 @@ function zoneNote(text) {
   if (box) box.textContent = text || '';
 }
 
+let zoneCommitTimer = null;
 function zoneDirty(on) {
   document.getElementById('zoneSave').disabled = !on;
+  // A name or a setting changed: that is an undoable step too, but only once
+  // the typing stops rather than once a keystroke.
+  if (on) {
+    clearTimeout(zoneCommitTimer);
+    zoneCommitTimer = setTimeout(() => zoneEd.commit(), 600);
+  }
 }
 
 function showZoneCount() {
@@ -3428,6 +3452,8 @@ function zonePick(i) {
   for (const z of zoneList) if (z.layer) z.layer.setStyle(ZONE_STYLE);
   const zone = zoneList[i];
   if (zone && zone.layer) zone.layer.setStyle(ZONE_PICKED);
+  const layer = zone && zone.layer ? zone.layer : null;
+  if (zoneEd.picked !== layer) zoneEd.pick(layer);
   drawZoneList();
   drawZoneEditor();
 }
@@ -3522,80 +3548,102 @@ function drawZoneEditor() {
   }
 }
 
-function addZoneLayer(zone) {
-  const layer = L.polygon(zone.ring.map(([lon, lat]) => [lat, lon]), ZONE_STYLE);
-  layer.on('click', ev => { L.DomEvent.stop(ev); zonePick(zoneList.indexOf(zone)); });
+// The editor owns the outline; this is what the page adds to it. The zone is
+// kept off the data the editor snapshots (its layer would be a loop).
+const zoneEd = KnoxDraw.create(map, {
+  group: zoneLayer,
+  style: () => ZONE_STYLE,
+  pickedStyle: ZONE_PICKED,
+  label: () => 'Zone',
+  note: text => zoneNote(text),
   // Sticky, so where zones overlap the label follows the pointer and names
   // the one it is actually over rather than the one it started on.
-  layer.bindTooltip(zoneTip(zone, zoneList.indexOf(zone)),
-                    { sticky: true, className: 'zone-tip' });
-  layer.on('mouseover', () => zoneDress(zone, true));
-  layer.on('mouseout', () => zoneDress(zone, false));
-  zoneLayer.addLayer(layer);
-  zone.layer = layer;
-}
+  tooltip: layer => zoneTip(layer.kdMeta || {}, zoneList.indexOf(layer.kdMeta)),
+  tooltipOptions: { sticky: true, className: 'zone-tip' },
+  newMeta: () => ({ name: `Zone ${zoneList.length + 1}`, settings: {} }),
+  cloneMeta: m => Object.assign(m, { name: `${m.name || 'Zone'} copy` }),
+  active: () => document.getElementById('zonesPanel').open
+                && document.getElementById('board').hidden,
+  listen: false,
+  onStart: () => { sketchEd.stop(); disarmAreaToolbar(); },
+  onAttach: layer => {
+    layer.on('mouseover', () => zoneDress(layer.kdMeta, true));
+    layer.on('mouseout', () => zoneDress(layer.kdMeta, false));
+  },
+  onPick: layer => {
+    const i = layer ? zoneList.indexOf(layer.kdMeta) : -1;
+    if (i !== zonePicked) zonePick(i);
+  },
+  onClaimed: layer => {
+    zonePick(zoneList.indexOf(layer.kdMeta));
+    zoneNote('Zone drawn. Set what is different about it, then save.');
+  },
+  onChange: state => {
+    refreshZoneTools();
+    if (state.rev === zoneRev) return;
+    zoneRev = state.rev;
+    zonesSync();
+    if (!zoneLoading) zoneDirty(true);
+  },
+});
+let refreshZoneTools = () => {};
+let zoneRev = 0;
+let zoneLoading = false;
+refreshZoneTools = KnoxDraw.toolbar(document.getElementById('zoneTools'), zoneEd);
 
-async function loadZones(mapName) {
-  await loadZoneMeta();
-  zoneLayer.clearLayers();
+// zoneList from the shapes, after any change to them.
+function zonesSync() {
+  const was = zoneList[zonePicked];
   zoneList = [];
-  zonePicked = -1;
-  if (mapName) {
-    try {
-      const data = await (await fetch(`/api/zones/${encodeURIComponent(mapName)}`)).json();
-      for (const z of data.zones || []) {
-        const zone = { name: z.name, ring: z.ring, settings: z.settings || {},
-                       wall_style: z.wall_style, presets: z.presets };
-        zoneList.push(zone);
-        addZoneLayer(zone);
-      }
-    } catch { /* a map with no zones simply has none */ }
-  }
-  zoneDirty(false);
+  zoneEd.each(layer => {
+    const zone = layer.kdMeta;
+    Object.defineProperty(zone, 'layer', { value: layer, writable: true,
+                                           configurable: true, enumerable: false });
+    // Off the enumerable data too: the editor snapshots it for undo, and the
+    // outline is already there.
+    Object.defineProperty(zone, 'ring', { value: layer.toGeoJSON().geometry.coordinates[0],
+                                          writable: true, configurable: true,
+                                          enumerable: false });
+    zoneList.push(zone);
+  });
+  zonePicked = zoneList.indexOf(was);
   drawZoneList();
   drawZoneEditor();
 }
 
+async function loadZones(mapName) {
+  await loadZoneMeta();
+  const items = [];
+  if (mapName) {
+    try {
+      const data = await (await fetch(`/api/zones/${encodeURIComponent(mapName)}`)).json();
+      for (const z of data.zones || []) {
+        items.push({
+          kind: 'zone',
+          layer: L.polygon(z.ring.map(([lon, lat]) => [lat, lon])),
+          meta: { name: z.name, settings: z.settings || {},
+                  wall_style: z.wall_style, presets: z.presets },
+        });
+      }
+    } catch { /* a map with no zones simply has none */ }
+  }
+  zoneLoading = true;
+  zoneEd.replace(items);
+  zoneLoading = false;
+  zoneDirty(false);
+}
+
 document.getElementById('zoneDraw').addEventListener('click', () => {
   loadZoneMeta().then(() => {
-    if (zoneDrawer) zoneDrawer.disable();
-    zoneDrawer = new L.Draw.Polygon(map, {
-      allowIntersection: false, shapeOptions: ZONE_STYLE });
-    zoneDrawer.enable();
-    zoneDrawing = true;
+    zoneEd.start('zone', 'area');
     zoneNote('Draw round the part of the map this zone covers; double-click to finish.');
   });
 });
 
-// Whichever of the three is armed owns the shape that comes back; this is the
-// third, so it is checked before the area selection falls through to it.
-let zoneDrawing = false;
-
-function zoneTookShape(layer) {
-  if (!zoneDrawing) return false;
-  zoneDrawing = false;
-  zoneDrawer = null;
-  const ring = layer.toGeoJSON().geometry.coordinates[0]
-    .map(([lon, lat]) => [lon, lat]);
-  const zone = { name: `Zone ${zoneList.length + 1}`, ring, settings: {} };
-  zoneList.push(zone);
-  addZoneLayer(zone);
-  zonePick(zoneList.length - 1);
-  zoneDirty(true);
-  zoneNote('Zone drawn. Set what is different about it, then save.');
-  return true;
-}
-
 document.getElementById('zoneList').addEventListener('click', ev => {
   const drop = ev.target.closest('[data-drop]');
   if (drop) {
-    const i = parseInt(drop.dataset.drop, 10);
-    if (zoneList[i].layer) zoneLayer.removeLayer(zoneList[i].layer);
-    zoneList.splice(i, 1);
-    zonePicked = -1;
-    zoneDirty(true);
-    drawZoneList();
-    drawZoneEditor();
+    zoneEd.remove(zoneList[parseInt(drop.dataset.drop, 10)].layer);
     return;
   }
   const row = ev.target.closest('li[data-i]');

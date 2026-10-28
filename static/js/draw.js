@@ -39,13 +39,21 @@
       snapExtra: () => [],  // more points to snap to: [[lat, lng], ...]
       listen: true,         // false when the owner forwards CREATED to claim()
       palette: null,        // element whose .sketch-pick buttons start tools
+      pickedStyle: PICKED,  // how the picked shape looks
+      tooltip: null,        // layer -> tooltip html; default is the label
+      tooltipOptions: { sticky: true },
+      newMeta: null,        // kind -> data a new shape carries (kept by undo)
+      cloneMeta: m => m,    // data -> the data a duplicate carries
+      onAttach: null,       // called with each shape put on the map
+      onClaimed: null,      // called with a shape the user has just drawn
+      onStart: null,        // called when a tool is armed
     }, opts);
     const group = o.group || new L.FeatureGroup().addTo(map);
     const crsSimple = map.options.crs === L.CRS.Simple;
 
     let kind = null, handler = null, picked = null, editing = false;
     let rect = false, geometry = null;
-    let history = [], at = -1;
+    let history = [], at = -1, rev = 0;
 
     // ---- measuring ---------------------------------------------------------
     const dist = (a, b) => (crsSimple ? Math.hypot(a.lat - b.lat, a.lng - b.lng)
@@ -80,7 +88,7 @@
       group.eachLayer(l => {
         if (!l.kdKind) return;
         const type = typeOf(l);
-        out.push({ kind: l.kdKind, type,
+        out.push({ kind: l.kdKind, type, meta: l.kdMeta,
                    pts: type === 'point' ? [[l.getLatLng().lat, l.getLatLng().lng]]
                                          : ringOf(l).map(p => [p.lat, p.lng]) });
       });
@@ -88,14 +96,15 @@
     };
 
     function state() {
-      return { count: group.getLayers().length, canUndo: at > 0,
+      return { count: group.getLayers().length, rev, canUndo: at > 0,
                canRedo: at < history.length - 1, picked, editing };
     }
     const changed = () => o.onChange(state());
 
     function commit() {
       const snap = snapshot();
-      if (snap === history[at]) { changed(); return; }
+      if (snap === history[at]) return;
+      rev += 1;
       history = history.slice(0, at + 1);
       history.push(snap);
       if (history.length > 200) history.shift();
@@ -116,8 +125,9 @@
       group.clearLayers();
       for (const item of JSON.parse(snap)) {
         const layer = build(item);
-        if (layer) attach(item.kind, layer);
+        if (layer) attach(item.kind, layer, item.meta);
       }
+      rev += 1;
       changed();
     }
 
@@ -172,10 +182,11 @@
     }
 
     // Tag a layer and put it on the map, without touching history.
-    function attach(k, layer) {
+    function attach(k, layer, meta) {
       layer.kdKind = k;
+      if (meta !== undefined) layer.kdMeta = meta;
       if (layer.setStyle) layer.setStyle(o.style(k));
-      layer.bindTooltip(o.label(k), { sticky: true });
+      layer.bindTooltip(o.tooltip ? o.tooltip(layer) : o.label(k), o.tooltipOptions);
       layer.on('click', ev => {
         if (handler) return;               // a click while drawing is a vertex
         L.DomEvent.stop(ev);
@@ -193,11 +204,12 @@
       });
       group.addLayer(layer);
       if (editing) drag(layer, true);
+      if (o.onAttach) o.onAttach(layer);
       return layer;
     }
 
-    function add(k, layer, silent) {
-      attach(k, layer);
+    function add(k, layer, silent, meta) {
+      attach(k, layer, meta);
       commit();
       if (!silent) o.note(`${o.label(k)} added.`);
       return layer;
@@ -224,9 +236,10 @@
     function replace(items) {
       pick(null);
       group.clearLayers();
-      for (const { kind: k, layer } of items) attach(k, layer);
+      for (const { kind: k, layer, meta } of items) attach(k, layer, meta);
       history = [snapshot()];
       at = 0;
+      rev += 1;
       changed();
     }
 
@@ -249,7 +262,8 @@
                        .map(p => off([p.lat, p.lng])) };
       const copy = build(item);
       if (!copy) return;
-      add(k, copy, true);
+      add(k, copy, true, picked.kdMeta === undefined ? undefined
+        : o.cloneMeta(JSON.parse(JSON.stringify(picked.kdMeta))));
       pick(copy);
       o.note(`${o.label(k)} copied. Drag it by its corners, or nudge with the arrow keys.`);
     }
@@ -274,7 +288,7 @@
     function pick(layer) {
       if (picked && picked.setStyle && picked.kdKind) picked.setStyle(o.style(picked.kdKind));
       picked = layer || null;
-      if (picked && picked.setStyle) picked.setStyle(PICKED);
+      if (picked && picked.setStyle) picked.setStyle(o.pickedStyle);
       renderPicked();
       if (o.onPick) o.onPick(picked);
       changed();
@@ -291,6 +305,7 @@
     }
 
     function start(k, geom) {
+      if (o.onStart) o.onStart();
       stop();
       pick(null);
       if (editing) setEditing(false);
@@ -330,9 +345,10 @@
       const shape = layer instanceof L.Rectangle
         ? L.polygon(layer.getLatLngs()[0]) : layer;
       const joined = snap(shape);
-      add(k, shape, true);
+      add(k, shape, true, o.newMeta ? o.newMeta(k) : undefined);
       o.note(`${o.label(k)} added${joined ? `, ${joined} end${joined === 1 ? '' : 's'} joined up` : ''}.`
         + (geom ? ' Pick another tool to keep going.' : ''));
+      if (o.onClaimed) o.onClaimed(shape);
       return true;
     }
 
@@ -406,7 +422,7 @@
     at = 0;
 
     return {
-      group, start, stop, claim, add, remove, clear, replace, each, duplicate,
+      group, start, stop, claim, commit, add, remove, clear, replace, each, duplicate,
       undo, redo, pick, setEditing, setRect, nudge, measure,
       get kind() { return kind; },
       get picked() { return picked; },
