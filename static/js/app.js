@@ -87,13 +87,7 @@ map.on(L.Draw.Event.CREATED, (e) => {
   // The area selection and the drawing palette both finish a shape the same
   // way; which of them it belongs to is which of them armed the handler.
   if (zoneTookShape(e.layer)) return;
-  if (sketchKind) {
-    const kind = sketchKind;
-    stopSketch();
-    addSketchShape(kind, e.layer);
-    noteSketch(`${sketchLabel(kind)} added. Pick another to keep drawing.`);
-    return;
-  }
+  if (sketchEd.claim(e.layer)) return;
   setSelection(e.layer);
 });
 
@@ -2457,8 +2451,23 @@ function pollCompile() {
 // tag that is wrong draws a shape on the page that is missing from the map.
 const sketchLayer = new L.FeatureGroup().addTo(map);
 let sketchPalette = [];
-let sketchKind = null;      // the palette id being drawn, or null for the bbox
-let sketchHandler = null;
+let refreshSketchTools = () => {};
+// The editor itself is static/js/draw.js, shared with the drawing board. It
+// does not listen for finished shapes here: the area selection above also
+// ends in a CREATED event, so the handler up there asks it to claim the shape.
+const sketchEd = KnoxDraw.create(map, {
+  group: sketchLayer,
+  style: kind => sketchStyle(kind),
+  label: kind => sketchLabel(kind),
+  note: text => noteSketch(text),
+  pickedBox: document.getElementById('sketchPicked'),
+  palette: document.getElementById('sketchPalette'),
+  active: () => document.getElementById('sketch').open
+                && document.getElementById('board').hidden,
+  listen: false,
+  onChange: () => { showSketchCount(); refreshSketchTools(); },
+});
+refreshSketchTools = KnoxDraw.toolbar(document.getElementById('sketchTools'), sketchEd);
 
 // What each category looks like while it is being drawn. Close enough to the
 // finished map to recognise, not so close it is mistaken for it.
@@ -2517,41 +2526,6 @@ async function loadSketchPalette() {
   if (!box) return;
   box.innerHTML = paletteMarkup();
   runListSearch('sketchPalette');
-  box.addEventListener('click', ev => {
-    const btn = ev.target.closest('.sketch-pick');
-    if (btn) startSketch(btn.dataset.kind, btn.dataset.geometry);
-  });
-}
-
-// Leaflet's own draw handlers, one shape at a time, rather than the toolbar:
-// the toolbar already belongs to the area selection and the two would fight
-// over which of them a finished shape belongs to.
-function startSketch(kind, geometry) {
-  stopSketch();
-  sketchKind = kind;
-  const style = sketchStyle(kind);
-  if (geometry === 'line') {
-    sketchHandler = new L.Draw.Polyline(map, { shapeOptions: style });
-  } else if (geometry === 'area') {
-    sketchHandler = new L.Draw.Polygon(map, {
-      allowIntersection: false, shapeOptions: style });
-  } else {
-    sketchHandler = new L.Draw.Marker(map, {});
-  }
-  sketchHandler.enable();
-  for (const b of document.querySelectorAll('.sketch-pick')) {
-    b.classList.toggle('on', b.dataset.kind === kind);
-  }
-  noteSketch(`Drawing ${sketchLabel(kind)}. Click the map; double-click or Escape to finish.`);
-}
-
-function stopSketch() {
-  if (sketchHandler) {
-    sketchHandler.disable();
-    sketchHandler = null;
-  }
-  sketchKind = null;
-  for (const b of document.querySelectorAll('.sketch-pick')) b.classList.remove('on');
 }
 
 function noteSketch(text) {
@@ -2560,7 +2534,7 @@ function noteSketch(text) {
 }
 
 function sketchCount() {
-  return sketchLayer.getLayers().length;
+  return sketchEd.count;
 }
 
 function showSketchCount() {
@@ -2571,29 +2545,18 @@ function showSketchCount() {
   if (only && !n) only.checked = false;
 }
 
-// A finished shape, as GeoJSON with the palette id on it. Point features come
-// back from Leaflet as a marker, which has no style of its own to carry.
-function addSketchShape(kind, layer) {
-  layer.sketchKind = kind;
-  if (layer.setStyle) layer.setStyle(sketchStyle(kind));
-  layer.bindTooltip(sketchLabel(kind), { sticky: true });
-  sketchLayer.addLayer(layer);
-  showSketchCount();
-}
-
+// What is drawn, as GeoJSON with the palette id on it.
 function sketchGeoJSON() {
   const features = [];
-  sketchLayer.eachLayer(layer => {
-    if (!layer.sketchKind) return;
-    const geo = layer.toGeoJSON();
-    features.push({ type: 'Feature', properties: { kind: layer.sketchKind },
-                    geometry: geo.geometry });
+  sketchEd.each((layer, kind) => {
+    features.push({ type: 'Feature', properties: { kind },
+                    geometry: layer.toGeoJSON().geometry });
   });
   return { type: 'FeatureCollection', features };
 }
 
 function loadSketchGeoJSON(drawn) {
-  sketchLayer.clearLayers();
+  const items = [];
   for (const f of (drawn && drawn.features) || []) {
     const kind = (f.properties || {}).kind;
     const geo = f.geometry || {};
@@ -2606,25 +2569,10 @@ function loadSketchGeoJSON(drawn) {
     } else if (geo.type === 'Point') {
       layer = L.marker([geo.coordinates[1], geo.coordinates[0]]);
     }
-    if (layer) addSketchShape(kind, layer);
+    if (layer) items.push({ kind, layer });
   }
-  showSketchCount();
+  sketchEd.replace(items);
 }
-
-document.getElementById('sketchUndo').addEventListener('click', () => {
-  const layers = sketchLayer.getLayers();
-  if (!layers.length) return;
-  sketchLayer.removeLayer(layers[layers.length - 1]);
-  showSketchCount();
-  noteSketch('Last shape removed.');
-});
-
-document.getElementById('sketchClear').addEventListener('click', () => {
-  if (!sketchCount()) return;
-  sketchLayer.clearLayers();
-  showSketchCount();
-  noteSketch('Cleared.');
-});
 
 document.getElementById('drawnOnly').addEventListener('change', ev => {
   noteSketch(ev.target.checked
@@ -2849,7 +2797,7 @@ document.getElementById('editReset').addEventListener('click', async () => {
 // two are swapped at the edges here and nowhere else; the server turns metres
 // into the world when it builds (generator/sketch.py, design_to_drawn).
 let boardMap = null;
-let boardLayer = null;
+let boardEd = null;             // the shared drawing editor (static/js/draw.js)
 let boardSheet = null;          // the rectangle showing the edge of the sheet
 let boardGrid = null;
 // A picture laid over the sheet to draw on top of: a screenshot of a town
@@ -2857,9 +2805,6 @@ let boardGrid = null;
 // It is only ever something to trace, so it is not saved with the drawing -
 // what gets built is what was drawn over it.
 let boardTrace = null;
-let boardKind = null;
-let boardHandler = null;
-let boardPicked = null;
 let boardOpened = null;         // the map whose sheet this is, once it has one
 let boardFitted = false;        // whether the sheet has been framed on screen
 
@@ -2871,7 +2816,6 @@ const BOARD_SNAP_M = 14;
 
 let boardJoin = null;           // the map this sheet is drawn to join
 let boardJoinLayers = null;     // its picture, its outline and its streets
-let boardEditing = false;       // whether what is drawn can be dragged about
 
 function boardSize() {
   const w = parseFloat(document.getElementById('boardWidth').value) || 900;
@@ -2907,7 +2851,7 @@ function boardCells() {
 }
 
 function boardShowCount() {
-  const n = boardLayer ? boardLayer.getLayers().length : 0;
+  const n = boardEd ? boardEd.count : 0;
   const badge = document.getElementById('boardCount');
   const { w, h } = boardSize();
   const cells = boardCells();
@@ -2960,10 +2904,6 @@ function boardFit() {
       boardMap.fitBounds([[0, 0], [h, w]], { padding: [24, 24] });
     }
   }, 0);
-}
-
-function boardStyleFor(kind) {
-  return sketchStyle(kind);
 }
 
 // ---- the map next door ------------------------------------------------------
@@ -3065,176 +3005,22 @@ async function boardLoadJoin() {
   }
 }
 
-// Everything a point could be meant to meet: the neighbour's streets, and the
-// corners of what is already on the sheet.
-function boardSnapPoints(skip) {
-  const out = [];
-  for (const join of (boardJoin && boardJoin.joins) || []) {
-    out.push([join.y, join.x]);
-  }
-  boardLayer.eachLayer(layer => {
-    if (layer === skip || !layer.boardKind) return;
-    const latlngs = layer.getLatLngs ? layer.getLatLngs() : null;
-    const flat = latlngs ? (Array.isArray(latlngs[0]) ? latlngs[0] : latlngs) : [];
-    for (const p of flat) out.push([p.lat, p.lng]);
-    if (!latlngs && layer.getLatLng) {
-      const p = layer.getLatLng();
-      out.push([p.lat, p.lng]);
-    }
-  });
-  return out;
-}
-
-// Move the ends of what was just drawn onto whatever they were aimed at.
-// Done when the shape is finished rather than while it is being drawn: the
-// result is the same and the drawing stays the plain Leaflet one.
-function boardSnap(layer) {
-  if (!document.getElementById('boardSnap').checked) return 0;
-  const targets = boardSnapPoints(layer);
-  if (!targets.length || !layer.getLatLngs) return 0;
-  const latlngs = layer.getLatLngs();
-  const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-  let moved = 0;
-  for (const point of ring) {
-    let best = null;
-    let far = BOARD_SNAP_M;
-    for (const [lat, lng] of targets) {
-      const d = Math.hypot(point.lat - lat, point.lng - lng);
-      if (d > 0 && d <= far) { far = d; best = [lat, lng]; }
-    }
-    if (best) {
-      point.lat = best[0];
-      point.lng = best[1];
-      moved += 1;
-    }
-  }
-  if (moved) layer.setLatLngs(latlngs);
-  return moved;
-}
-
-// How long or how big the thing is, in the units somebody drawing a town
-// thinks in.
-function boardMeasure(layer) {
-  const latlngs = layer.getLatLngs && layer.getLatLngs();
-  if (!latlngs) return '';
-  const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-  if (ring.length < 2) return '';
-  if (layer instanceof L.Polygon) {
-    let twice = 0;
-    for (let i = 0; i < ring.length; i += 1) {
-      const a = ring[i];
-      const b = ring[(i + 1) % ring.length];
-      twice += a.lng * b.lat - b.lng * a.lat;
-    }
-    const area = Math.abs(twice) / 2;
-    return area >= 10000 ? `${(area / 10000).toFixed(2)} ha`
-                         : `${Math.round(area)} m²`;
-  }
-  let run = 0;
-  for (let i = 1; i < ring.length; i += 1) {
-    run += Math.hypot(ring[i].lat - ring[i - 1].lat, ring[i].lng - ring[i - 1].lng);
-  }
-  return `${Math.round(run)} m long`;
-}
-
-function boardAdd(kind, layer, silent) {
-  layer.boardKind = kind;
-  if (layer.setStyle) layer.setStyle(boardStyleFor(kind));
-  layer.bindTooltip(sketchLabel(kind), { sticky: true });
-  layer.on('click', ev => { L.DomEvent.stop(ev); boardPick(layer); });
-  boardLayer.addLayer(layer);
-  if (boardEditing) boardLetDrag(layer, true);
-  boardShowCount();
-  if (!silent) boardNote(`${sketchLabel(kind)} added.`);
-}
-
-// Dragging corners about rather than drawing the whole thing again, which
-// was the only way to move a street a few metres.
-function boardLetDrag(layer, on) {
-  // A line or a shape has corners to drag; a point is dragged whole.
-  const handle = layer.editing || layer.dragging;
-  if (!handle) return;
-  if (on) handle.enable();
-  else handle.disable();
-}
-
-function boardEditMode(on) {
-  boardEditing = on;
-  if (on) boardStop();
-  boardLayer.eachLayer(layer => boardLetDrag(layer, on));
-  const btn = document.getElementById('boardEdit');
-  if (btn) btn.classList.toggle('on', on);
-  boardNote(on ? 'Drag a corner to move it, or the middle of a line to add '
-                 + 'one. Click Move and reshape again to stop.'
-               : 'Back to drawing.');
-}
-
-function boardPick(layer) {
-  if (boardPicked && boardPicked.setStyle) {
-    boardPicked.setStyle(boardStyleFor(boardPicked.boardKind));
-  }
-  boardPicked = layer;
-  const dupe = document.getElementById('boardDupe');
-  if (dupe) dupe.disabled = !layer;
-  const box = document.getElementById('boardPicked');
-  if (!layer) { box.hidden = true; box.innerHTML = ''; return; }
-  layer.setStyle({ color: '#ff5f5f', weight: 4 });
-  box.hidden = false;
-  const size = boardMeasure(layer);
-  box.innerHTML = `<span class="hint">${escapeHtml(sketchLabel(layer.boardKind))}`
-    + `${size ? ` · ${size}` : ''}</span>
-    <button type="button" id="boardDelete" class="btn">Remove</button>`;
-  document.getElementById('boardDelete').addEventListener('click', () => {
-    boardLayer.removeLayer(layer);
-    boardPick(null);
-    boardShowCount();
-    boardNote('Removed.');
-  });
-}
-
-function boardStop() {
-  if (boardHandler) { boardHandler.disable(); boardHandler = null; }
-  boardKind = null;
-  for (const b of document.querySelectorAll('#boardPalette .sketch-pick')) {
-    b.classList.remove('on');
-  }
-}
-
-function boardStart(kind, geometry) {
-  boardStop();
-  boardPick(null);
-  boardKind = kind;
-  const style = boardStyleFor(kind);
-  if (geometry === 'line') {
-    boardHandler = new L.Draw.Polyline(boardMap, { shapeOptions: style });
-  } else if (geometry === 'area') {
-    boardHandler = new L.Draw.Polygon(boardMap, {
-      allowIntersection: false, shapeOptions: style });
-  } else {
-    boardHandler = new L.Draw.Marker(boardMap, {});
-  }
-  boardHandler.enable();
-  for (const b of document.querySelectorAll('#boardPalette .sketch-pick')) {
-    b.classList.toggle('on', b.dataset.kind === kind);
-  }
-  boardNote(`Drawing ${sketchLabel(kind)}. Double-click to finish.`);
+// The streets of the map next door, which a road drawn to the border should
+// meet. The editor adds the corners of what is already on the sheet.
+function boardJoinPoints() {
+  return ((boardJoin && boardJoin.joins) || []).map(j => [j.y, j.x]);
 }
 
 function boardPaletteInto(box) {
   box.innerHTML = paletteMarkup();
   runListSearch(box.id);
-  box.addEventListener('click', ev => {
-    const btn = ev.target.closest('.sketch-pick');
-    if (btn) boardStart(btn.dataset.kind, btn.dataset.geometry);
-  });
 }
 
 // What is on the sheet, in metres, as the server stores and reads it.
 function boardDesign() {
   const { w, h } = boardSize();
   const features = [];
-  boardLayer.eachLayer(layer => {
-    if (!layer.boardKind) return;
+  boardEd.each((layer, kind) => {
     const geo = layer.toGeoJSON().geometry;
     let ring;
     if (geo.type === 'Polygon') ring = geo.coordinates[0];
@@ -3246,7 +3032,7 @@ function boardDesign() {
     // 900 m sheet is simply off the map, which is not what somebody dragging
     // a street to the edge of the page meant.
     const clamp = (v, hi) => Math.min(Math.max(v, 0), hi);
-    features.push({ kind: layer.boardKind,
+    features.push({ kind,
                     points: ring.map(([x, y]) => [clamp(x, w), clamp(y, h)]) });
   });
   return { width_m: w, height_m: h,
@@ -3254,12 +3040,11 @@ function boardDesign() {
 }
 
 function boardLoadDesign(design) {
-  boardLayer.clearLayers();
-  boardPick(null);
-  if (!design) { boardShowCount(); return; }
+  if (!design) { boardEd.replace([]); boardShowCount(); return; }
   document.getElementById('boardWidth').value = design.width_m || 900;
   document.getElementById('boardHeight').value = design.height_m || 900;
   boardDrawSheet();
+  const items = [];
   for (const f of design.features || []) {
     const entry = sketchPalette.find(e => e.id === f.kind);
     if (!entry) continue;
@@ -3268,8 +3053,9 @@ function boardLoadDesign(design) {
     if (entry.geometry === 'area' && pts.length >= 3) layer = L.polygon(pts);
     else if (entry.geometry === 'line' && pts.length >= 2) layer = L.polyline(pts);
     else if (entry.geometry === 'point' && pts.length) layer = L.marker(pts[0]);
-    if (layer) boardAdd(f.kind, layer, true);
+    if (layer) items.push({ kind: f.kind, layer });
   }
+  boardEd.replace(items);
   boardFit();
   boardShowCount();
 }
@@ -3293,18 +3079,20 @@ function boardOpen(mapName) {
     // on it or measured against it; fitting the sheet refines this a moment
     // later, once the panel it lives in has a size.
     boardMap.setView([450, 450], 0);
-    boardLayer = new L.FeatureGroup().addTo(boardMap);
-    boardMap.on(L.Draw.Event.CREATED, e => {
-      const kind = boardKind;
-      boardStop();
-      if (!kind) return;
-      const joined = boardSnap(e.layer);
-      boardAdd(kind, e.layer);
-      if (joined) {
-        boardNote(`${sketchLabel(kind)} added, ${joined} `
-          + `end${joined === 1 ? '' : 's'} joined up.`);
-      }
+    let refreshBoardTools = () => {};
+    boardEd = KnoxDraw.create(boardMap, {
+      style: kind => sketchStyle(kind),
+      label: kind => sketchLabel(kind),
+      note: boardNote,
+      pickedBox: document.getElementById('boardPicked'),
+      palette: document.getElementById('boardPalette'),
+      active: () => !document.getElementById('board').hidden,
+      snapOn: () => document.getElementById('boardSnap').checked,
+      snapDist: BOARD_SNAP_M,
+      snapExtra: boardJoinPoints,
+      onChange: () => { boardShowCount(); refreshBoardTools(); },
     });
+    refreshBoardTools = KnoxDraw.toolbar(document.getElementById('boardTools'), boardEd);
     // The first size the map gets may arrive after it was opened, if the
     // window was behind another one at the time.
     boardMap.on('resize', () => {
@@ -3400,50 +3188,9 @@ document.getElementById('boardMatchEdge').addEventListener('click', () => {
     + 'the side they share.');
 });
 
-document.getElementById('boardEdit').addEventListener('click', () =>
-  boardEditMode(!boardEditing));
-
-document.getElementById('boardDupe').addEventListener('click', () => {
-  if (!boardPicked) return;
-  const kind = boardPicked.boardKind;
-  const shift = ([lat, lng]) => [lat - 20, lng + 20];
-  let copy = null;
-  if (boardPicked.getLatLngs) {
-    const latlngs = boardPicked.getLatLngs();
-    const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-    const moved = ring.map(p => shift([p.lat, p.lng]));
-    copy = boardPicked instanceof L.Polygon ? L.polygon(moved) : L.polyline(moved);
-  } else if (boardPicked.getLatLng) {
-    const p = boardPicked.getLatLng();
-    copy = L.marker(shift([p.lat, p.lng]));
-  }
-  if (!copy) return;
-  boardAdd(kind, copy, true);
-  boardPick(copy);
-  boardNote(`${sketchLabel(kind)} copied, twenty metres along.`);
-});
-
-// Delete takes out what is picked; Escape stops drawing, as it does
-// everywhere else.
-document.addEventListener('keydown', ev => {
-  if (document.getElementById('board').hidden) return;
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target.tagName || ''));
-  if (typing) return;
-  if (ev.key === 'Escape' && boardKind) {
-    boardStop();
-    boardNote('Stopped drawing.');
-  } else if ((ev.key === 'Delete' || ev.key === 'Backspace') && boardPicked) {
-    const gone = boardPicked;
-    boardPick(null);
-    boardLayer.removeLayer(gone);
-    boardShowCount();
-    boardNote('Removed.');
-  }
-});
-
 document.getElementById('boardClose').addEventListener('click', () => {
-  boardStop();
-  if (boardEditing) boardEditMode(false);
+  boardEd.stop();
+  if (boardEd.editing) boardEd.setEditing(false);
   document.getElementById('board').hidden = true;
 });
 
@@ -3497,22 +3244,6 @@ document.getElementById('boardTraceOff').addEventListener('click', () => {
   boardTrace = null;
   boardTraceShow(false);
   boardNote('Picture removed.');
-});
-
-document.getElementById('boardUndo').addEventListener('click', () => {
-  const layers = boardLayer.getLayers();
-  if (!layers.length) return;
-  boardLayer.removeLayer(layers[layers.length - 1]);
-  boardPick(null);
-  boardShowCount();
-  boardNote('Last thing removed.');
-});
-
-document.getElementById('boardClear').addEventListener('click', () => {
-  boardLayer.clearLayers();
-  boardPick(null);
-  boardShowCount();
-  boardNote('Sheet cleared.');
 });
 
 function boardMapName() {

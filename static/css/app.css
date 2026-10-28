@@ -631,3 +631,11 @@ summary .count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .place-row .is-on { color: var(--accent-ink); background: var(--accent);
   border-color: var(--accent); }
 #placeNote.bad { color: var(--bad); }
+
+/* The drawing editor's toolbar (static/js/draw.js): one row of buttons
+   wherever it appears, dimmed when there is nothing for them to act on. */
+.kd-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#boardTools { display: contents; }
+.kd-bar .btn { font-size: 12px; padding: 4px 10px; width: auto; }
+.kd-bar .btn:disabled { opacity: .45; cursor: default; }
+.kd-bar .btn.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
