@@ -447,7 +447,7 @@ const SETTING_LABELS = {
   tree_density:        ['Woodland', 'Scales tree cover everywhere: the woods, the gardens and the scrub over open ground. Trees are cover to hide in.'],
   forest_density:      ['Forests', 'Scales the woods the mapper drew, on top of Woodland. Thick forest round a thinly planted town, or the other way about.'],
   seed:                ['Seed', 'Same seed and area gives the same town again.'],
-  fill_gaps:           ['Fill gaps from Overture', 'On adds the buildings OpenStreetMap has not got, from Overture Maps - OSM plus machine-detected roofprints, same licence. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Needs DuckDB.'],
+  fill_gaps:           ['Fill gaps from Microsoft footprints', 'On adds the buildings OpenStreetMap has not got, from Microsoft’s machine-detected building footprints, same licence. Downloads about 30 MB per tile on the first run, nothing to install. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Falls back to Overture (needs DuckDB) if Microsoft cannot be reached.'],
   true_map:            ['True map generation', 'On builds every address as mapped. Off keeps the real roads, rivers, woods and terrain, but leaves out half the houses and grows the rest into proper homes with yards. Named places are always built, at the game’s size.'],
   guaranteed_rifle:    ['Guaranteed rifle', 'On leaves one military rifle on the map: in an army building if there is one, else the police station, else a gun shop, else a house on the edge of town. A real town has no checkpoints for one to spawn in.'],
   min_size:            ['Smallest building', 'Buildings narrower than this many tiles are left out.'],
