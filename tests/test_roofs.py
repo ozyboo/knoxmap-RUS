@@ -30,6 +30,22 @@ class RoofLayouts(unittest.TestCase):
                 for _other, other_x, other_y, _other_orientation in placement[index + 1:]:
                     self.assertTrue(abs(x - other_x) > 1 or abs(y - other_y) > 1)
 
+    def test_a_wide_block_among_many_wings_is_not_given_the_steep_roof(self):
+        # An 11-wide block with two narrow wings: three pieces, so the block takes the
+        # 45-degree roof (three levels at most), not a 30-degree one six levels high.
+        grid = [[1] * 11 for _ in range(12)]
+        for y in range(2, 5):
+            grid[y] += [1] * 3
+        for y in range(8, 11):
+            grid[y] += [1] * 3
+        grid = [row + [0] * (14 - len(row)) for row in grid]
+        kinds = [k for k, _d, _c, box in tbx._roof_pieces(layout.roof_rects(grid), True, True)
+                 if box[2] * box[3] >= 100]
+        self.assertTrue(kinds and all(not k.startswith("Peak30") for k in kinds), kinds)
+        # Alone, the same block keeps it.
+        alone = tbx._roof_pieces(layout.roof_rects([[1] * 11 for _ in range(12)]), True, True)
+        self.assertTrue(any(k.startswith("Peak30") for k, *_ in alone), alone)
+
 
 if __name__ == "__main__":
     unittest.main()

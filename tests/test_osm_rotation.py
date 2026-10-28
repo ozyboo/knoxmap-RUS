@@ -131,6 +131,30 @@ class TileCache(Base):
                 got = osm.fetch_features_tiled(*BOX, max_tile_km2=100)
             self.assertEqual([f.osm_id for f in got], [3])
 
+    def _expired(self, box):
+        osm._tile_cache_put(box, [feat(5)])
+        old = osm.time.time() - osm.TILE_CACHE_MAX_AGE_S - 10
+        os.utime(osm._tile_cache_file(box), (old, old))
+
+    def test_old_tile_is_used_when_every_server_is_down(self):
+        with tempfile.TemporaryDirectory() as d,                 mock.patch.object(osm, "TILE_CACHE_DIR", d),                 mock.patch.object(osm, "check_endpoints", lambda *a: None),                 mock.patch.object(osm, "_retry_pause", lambda a: 0),                 mock.patch.object(osm, "_local_features", lambda *a: []),                 mock.patch.object(osm, "_ask", side_effect=requests.ConnectionError("down")):
+            self._expired(BOX)
+            osm.STALE_TILES_USED.clear()
+            notes = []
+            got = osm.fetch_features_tiled(*BOX, max_tile_km2=100,
+                                           progress=lambda *a: notes.append(a[-1] if len(a) > 2 else ""))
+            self.assertEqual([f.osm_id for f in got], [5])
+            self.assertEqual(osm.STALE_TILES_USED, [1])
+            self.assertTrue(any("earlier download" in n for n in notes))
+
+    def test_a_map_with_a_missing_tile_is_not_patched_up_from_old_ones(self):
+        # Four tiles, only one of them kept: a hole would come out as empty ground.
+        with tempfile.TemporaryDirectory() as d,                 mock.patch.object(osm, "TILE_CACHE_DIR", d),                 mock.patch.object(osm, "check_endpoints", lambda *a: None),                 mock.patch.object(osm, "_retry_pause", lambda a: 0),                 mock.patch.object(osm, "_local_features", lambda *a: []),                 mock.patch.object(osm, "_ask", side_effect=requests.ConnectionError("down")):
+            d_lat, d_lon = (37.01 - 37.0) / 2, (-82.99 + 83.0) / 2
+            self._expired((37.0, -83.0, 37.0 + d_lat, -83.0 + d_lon))  # one of the four
+            with self.assertRaises(osm.OverpassError):
+                osm.fetch_features_tiled(37.0, -83.0, 37.01, -82.99, max_tile_km2=0.3)
+
 
 class Explain(unittest.TestCase):
     def test_busy_message_is_plain(self):

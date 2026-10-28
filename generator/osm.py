@@ -534,6 +534,9 @@ def _say(progress, done: int, total: int, note: str) -> None:
 # moves, and the filters change (FILTERS_VERSION is checked by load_cache).
 TILE_CACHE_DIR = os.path.join(str(knoxpaths.BASE_DIR), "cache", "overpass_tiles")
 TILE_CACHE_MAX_AGE_S = 14 * 86400
+# How many tiles each download had to take from the cache past their age, for
+# the tests and the log; the download itself says so through `progress`.
+STALE_TILES_USED: list = []
 
 
 def _tile_cache_file(box: tuple) -> str:
@@ -542,10 +545,11 @@ def _tile_cache_file(box: tuple) -> str:
     return os.path.join(TILE_CACHE_DIR, f"{name}.json.gz")
 
 
-def _tile_cache_get(box: tuple) -> list | None:
+def _tile_cache_get(box: tuple, stale_ok: bool = False) -> list | None:
+    """A kept tile; one past its age only when `stale_ok` (the servers are down)."""
     path = _tile_cache_file(box)
     try:
-        if time.time() - os.path.getmtime(path) > TILE_CACHE_MAX_AGE_S:
+        if not stale_ok and time.time() - os.path.getmtime(path) > TILE_CACHE_MAX_AGE_S:
             return None
     except OSError:
         return None
@@ -713,6 +717,19 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
             break
 
     if left:
+        # Next to last: the same tiles as kept from an earlier download, however
+        # old. Only all of them will do - a map with holes where the tiles were
+        # missing would come out with empty ground there.
+        old_tiles = [_tile_cache_get(tiles[i], stale_ok=True) for i, _ in left]
+        if all(t is not None for t in old_tiles):
+            for feats in old_tiles:
+                for feat in feats:
+                    merged.setdefault((feat.kind, feat.osm_id), feat)
+            STALE_TILES_USED.append(len(left))
+            _say(progress, total, total,
+                 f"the Overpass servers did not answer — {len(left)} of {total} "
+                 f"tiles come from an earlier download and may be out of date")
+            return list(merged.values())
         # Last resort: an Overpass-JSON export the player supplied.
         local = _local_features(south, west, north, east)
         if local:
