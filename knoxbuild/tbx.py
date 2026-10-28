@@ -62,6 +62,12 @@ def _peak_depth(across: int) -> str:
 # narrower than NARROW_PEAK_MIN stays flat. Set PITCH_LOWER_ROOFS = False for the old roofs.
 PITCH_LOWER_ROOFS = True
 NARROW_PEAK_MIN = 2
+# A footprint of many wings gives each its own roof, and a steep 30-degree one over a wide
+# block rises twice as high as the 45-degree roofs of the wings beside it. Past
+# MANY_WING_RECTS pieces a block wider than MANY_WING_PEAK30_MAX across takes the 45-degree
+# roof too, whose height stops at three levels.
+MANY_WING_RECTS = 3
+MANY_WING_PEAK30_MAX = 7
 
 
 def _roof_pieces(rects, peaked: bool, roof30: bool = True):
@@ -87,7 +93,8 @@ def _roof_pieces(rects, peaked: bool, roof30: bool = True):
             continue
         along_x = rw >= rh
         # a narrow wing (2-3 across) takes a low 45-degree roof rather than a flat one
-        if not roof30 or across > PEAK30_MAX_ACROSS + 2 or across < PEAK_MIN_TILES:
+        steep_block = len(rects) >= MANY_WING_RECTS and across > MANY_WING_PEAK30_MAX
+        if not roof30 or steep_block or across > PEAK30_MAX_ACROSS + 2 or across < PEAK_MIN_TILES:
             cap = dict(_NO_CAPS)
             if along_x:
                 cap["cappedW"], cap["cappedE"] = caps["cappedW"], caps["cappedE"]
