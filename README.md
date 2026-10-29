@@ -55,7 +55,7 @@ actually lived, and installs the result as a mod.
   schools, churches, clinics, offices and factories laid out as what they are.
   Every room has a light switch, every staircase is clear, and roofs follow the
   footprint.
-- **Real heights, up to 30 storeys**, taken from OpenStreetMap where they are
+- **Real heights, up to 31 storeys**, taken from OpenStreetMap where they are
   mapped and from the neighbours where they are not.
 - **Working lifts** in buildings of five storeys or more, when the
   [Elevators](https://steamcommunity.com/sharedfiles/filedetails/?id=3780306632)
@@ -173,7 +173,7 @@ Open **Fine tuning** under *Style*:
 | **Living space** | Floor area per person. Lower means more crowded buildings and more zombies. |
 | **Horde cap** | The most zombies one 10×10-tile spot can hold. Vanilla towns peak at 10. |
 | **Flats above / Flats chance** | How readily large untagged buildings become blocks of flats. |
-| **Tallest building** | The storey limit, up to 30. Real heights from OpenStreetMap are used where mapped. Tall cities take much longer to compile. |
+| **Tallest building** | The storey limit, up to 31. Real heights from OpenStreetMap are used where mapped. Tall cities take much longer to compile. |
 | **Straighten streets** | 1 turns the map so its main street grid runs along the tiles; 0 keeps north straight up, with diagonal streets as staircases. |
 | **Knox County roads** | 1 lays every road in straight runs along the tiles and on 45-degree diagonals, like the game's own map: curves become straight sides with 45-degree corners, and the buildings, parks and car parks move with their streets and stand upright beside them. Streets end up a little way off their real places. 0 draws roads as mapped. |
 | **Woodland**, **Parking**, **Room size** | What they say. |
@@ -211,7 +211,7 @@ second without rebuilding, then compile again so the game sees the change.
 
 - **Size and time.** A few square kilometres is a comfortable town. Compiling is
   the slow part: a 600 × 600 m city block takes a minute or two, and several
-  minutes with 30-storey towers.
+  minutes with 31-storey towers.
 - **North may not be up.** With *Straighten streets* on, the map is turned to
   its street grid, often by 20-45°. The in-game map is turned the same way.
 - **Maps are cached.** Regenerating the same area reuses its OpenStreetMap
@@ -253,7 +253,7 @@ playing. Help is very welcome here, especially screenshots from the game.
 
 - **Not yet confirmed in game:** that kerb tiles face the right way, that lifts
   carry players with the Elevators mod, how labels in non-Latin scripts appear
-  on the in-game map, and how 30-storey towers play.
+  on the in-game map, and how 31-storey towers play.
 - **Winding old towns** have no single street grid, so their streets still step
   across the tiles where they turn.
 - **Very large buildings** (over 200 tiles across by default) are skipped.

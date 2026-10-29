@@ -86,15 +86,17 @@ function setSelection(layer) {
 map.on(L.Draw.Event.CREATED, (e) => {
   // The area selection and the drawing palette both finish a shape the same
   // way; which of them it belongs to is which of them armed the handler.
-  if (zoneTookShape(e.layer)) return;
-  if (sketchKind) {
-    const kind = sketchKind;
-    stopSketch();
-    addSketchShape(kind, e.layer);
-    noteSketch(`${sketchLabel(kind)} added. Pick another to keep drawing.`);
-    return;
-  }
+  if (zoneEd.claim(e.layer)) return;
+  if (sketchEd.claim(e.layer)) return;
   setSelection(e.layer);
+});
+
+// One draw handler at a time on the world map: the area toolbar, the sketch
+// palette and the zone tool each arm one, and two armed at once would both
+// answer the same clicks. Whichever started last wins.
+map.on(L.Draw.Event.DRAWSTART, () => {
+  const mine = [sketchEd, zoneEd].find(e => e.kind);
+  for (const e of [sketchEd, zoneEd]) if (e !== mine) e.stop();
 });
 
 // ---- freehand lasso ---------------------------------------------------------------
@@ -445,7 +447,7 @@ const SETTING_LABELS = {
   tree_density:        ['Woodland', 'Scales tree cover everywhere: the woods, the gardens and the scrub over open ground. Trees are cover to hide in.'],
   forest_density:      ['Forests', 'Scales the woods the mapper drew, on top of Woodland. Thick forest round a thinly planted town, or the other way about.'],
   seed:                ['Seed', 'Same seed and area gives the same town again.'],
-  fill_gaps:           ['Fill gaps from Overture', 'On adds the buildings OpenStreetMap has not got, from Overture Maps - OSM plus machine-detected roofprints, same licence. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Needs DuckDB.'],
+  fill_gaps:           ['Fill gaps from Microsoft footprints', 'On adds the buildings OpenStreetMap has not got, from Microsoft’s machine-detected building footprints, same licence. Downloads about 30 MB per tile on the first run, nothing to install. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Falls back to Overture (needs DuckDB) if Microsoft cannot be reached.'],
   true_map:            ['True map generation', 'On builds every address as mapped. Off keeps the real roads, rivers, woods and terrain, but leaves out half the houses and grows the rest into proper homes with yards. Named places are always built, at the game’s size.'],
   guaranteed_rifle:    ['Guaranteed rifle', 'On leaves one military rifle on the map: in an army building if there is one, else the police station, else a gun shop, else a house on the edge of town. A real town has no checkpoints for one to spawn in.'],
   min_size:            ['Smallest building', 'Buildings narrower than this many tiles are left out.'],
@@ -457,7 +459,7 @@ const SETTING_LABELS = {
   apartment_chance:    ['Flats chance', 'How often such a footprint really becomes flats.'],
   vanilla_tiles:       ['Vanilla tiles only', 'On builds with the game’s own art only, leaving Erika’s Tiles out even when it is installed. A map built with the mod needs the mod to look right, so this is the one to turn on before handing a map to somebody who has not subscribed.'],
   height_mix:          ['Height mix', 'How tall the buildings OpenStreetMap says nothing about come out. As the place is lets the kind of building and the size of its footprint decide, which is the closest to the real thing. The rest shape that guess for the skyline you want. A building whose floors OSM does record keeps them whatever this says.'],
-  max_levels:          ['Tallest building', 'Storeys, up to 30 - as tall as the base game gets. OSM heights are capped to this. Tall cities take longer to compile.'],
+  max_levels:          ['Tallest building', 'Storeys, up to 31 - Build 42’s height limit, less the roof. OSM heights are capped to this. Tall cities take longer to compile.'],
   room_size:           ['Room size', 'Target room area in tiles before it gets split.'],
   room_solver:         ['Planned house rooms', 'On plans each house of up to four storeys as a whole: a hall from the front door, the stairs against a wall, the kitchen at the back, bedrooms and the bathroom upstairs, every room with its own window. Anything else is built as before. Needs OR-Tools (pip install ortools). The first build is slower, a few seconds a house shape; each shape is remembered after that.'],
   building_alignment:  ['Building alignment', 'Real preserves the mapped outline. Smart squares near-grid buildings. Rectilinear aligns the dominant wall direction while keeping the footprint shape. Rectangle uses a clean box.'],
@@ -2457,8 +2459,29 @@ function pollCompile() {
 // tag that is wrong draws a shape on the page that is missing from the map.
 const sketchLayer = new L.FeatureGroup().addTo(map);
 let sketchPalette = [];
-let sketchKind = null;      // the palette id being drawn, or null for the bbox
-let sketchHandler = null;
+// The area toolbar's own handler, if one is armed, so a tool started from
+// somewhere else does not leave it listening as well.
+function disarmAreaToolbar() {
+  try { drawControl._toolbars.draw.disable(); } catch { /* nothing armed */ }
+}
+let refreshSketchTools = () => {};
+// The editor itself is static/js/draw.js, shared with the drawing board. It
+// does not listen for finished shapes here: the area selection above also
+// ends in a CREATED event, so the handler up there asks it to claim the shape.
+const sketchEd = KnoxDraw.create(map, {
+  group: sketchLayer,
+  style: kind => sketchStyle(kind),
+  label: kind => sketchLabel(kind),
+  note: text => noteSketch(text),
+  pickedBox: document.getElementById('sketchPicked'),
+  palette: document.getElementById('sketchPalette'),
+  active: () => document.getElementById('sketch').open
+                && document.getElementById('board').hidden,
+  listen: false,
+  onStart: () => { zoneEd.stop(); disarmAreaToolbar(); },
+  onChange: () => { showSketchCount(); refreshSketchTools(); },
+});
+refreshSketchTools = KnoxDraw.toolbar(document.getElementById('sketchTools'), sketchEd);
 
 // What each category looks like while it is being drawn. Close enough to the
 // finished map to recognise, not so close it is mistaken for it.
@@ -2517,41 +2540,6 @@ async function loadSketchPalette() {
   if (!box) return;
   box.innerHTML = paletteMarkup();
   runListSearch('sketchPalette');
-  box.addEventListener('click', ev => {
-    const btn = ev.target.closest('.sketch-pick');
-    if (btn) startSketch(btn.dataset.kind, btn.dataset.geometry);
-  });
-}
-
-// Leaflet's own draw handlers, one shape at a time, rather than the toolbar:
-// the toolbar already belongs to the area selection and the two would fight
-// over which of them a finished shape belongs to.
-function startSketch(kind, geometry) {
-  stopSketch();
-  sketchKind = kind;
-  const style = sketchStyle(kind);
-  if (geometry === 'line') {
-    sketchHandler = new L.Draw.Polyline(map, { shapeOptions: style });
-  } else if (geometry === 'area') {
-    sketchHandler = new L.Draw.Polygon(map, {
-      allowIntersection: false, shapeOptions: style });
-  } else {
-    sketchHandler = new L.Draw.Marker(map, {});
-  }
-  sketchHandler.enable();
-  for (const b of document.querySelectorAll('.sketch-pick')) {
-    b.classList.toggle('on', b.dataset.kind === kind);
-  }
-  noteSketch(`Drawing ${sketchLabel(kind)}. Click the map; double-click or Escape to finish.`);
-}
-
-function stopSketch() {
-  if (sketchHandler) {
-    sketchHandler.disable();
-    sketchHandler = null;
-  }
-  sketchKind = null;
-  for (const b of document.querySelectorAll('.sketch-pick')) b.classList.remove('on');
 }
 
 function noteSketch(text) {
@@ -2560,7 +2548,7 @@ function noteSketch(text) {
 }
 
 function sketchCount() {
-  return sketchLayer.getLayers().length;
+  return sketchEd.count;
 }
 
 function showSketchCount() {
@@ -2571,29 +2559,18 @@ function showSketchCount() {
   if (only && !n) only.checked = false;
 }
 
-// A finished shape, as GeoJSON with the palette id on it. Point features come
-// back from Leaflet as a marker, which has no style of its own to carry.
-function addSketchShape(kind, layer) {
-  layer.sketchKind = kind;
-  if (layer.setStyle) layer.setStyle(sketchStyle(kind));
-  layer.bindTooltip(sketchLabel(kind), { sticky: true });
-  sketchLayer.addLayer(layer);
-  showSketchCount();
-}
-
+// What is drawn, as GeoJSON with the palette id on it.
 function sketchGeoJSON() {
   const features = [];
-  sketchLayer.eachLayer(layer => {
-    if (!layer.sketchKind) return;
-    const geo = layer.toGeoJSON();
-    features.push({ type: 'Feature', properties: { kind: layer.sketchKind },
-                    geometry: geo.geometry });
+  sketchEd.each((layer, kind) => {
+    features.push({ type: 'Feature', properties: { kind },
+                    geometry: layer.toGeoJSON().geometry });
   });
   return { type: 'FeatureCollection', features };
 }
 
 function loadSketchGeoJSON(drawn) {
-  sketchLayer.clearLayers();
+  const items = [];
   for (const f of (drawn && drawn.features) || []) {
     const kind = (f.properties || {}).kind;
     const geo = f.geometry || {};
@@ -2606,25 +2583,10 @@ function loadSketchGeoJSON(drawn) {
     } else if (geo.type === 'Point') {
       layer = L.marker([geo.coordinates[1], geo.coordinates[0]]);
     }
-    if (layer) addSketchShape(kind, layer);
+    if (layer) items.push({ kind, layer });
   }
-  showSketchCount();
+  sketchEd.replace(items);
 }
-
-document.getElementById('sketchUndo').addEventListener('click', () => {
-  const layers = sketchLayer.getLayers();
-  if (!layers.length) return;
-  sketchLayer.removeLayer(layers[layers.length - 1]);
-  showSketchCount();
-  noteSketch('Last shape removed.');
-});
-
-document.getElementById('sketchClear').addEventListener('click', () => {
-  if (!sketchCount()) return;
-  sketchLayer.clearLayers();
-  showSketchCount();
-  noteSketch('Cleared.');
-});
 
 document.getElementById('drawnOnly').addEventListener('change', ev => {
   noteSketch(ev.target.checked
@@ -2849,7 +2811,7 @@ document.getElementById('editReset').addEventListener('click', async () => {
 // two are swapped at the edges here and nowhere else; the server turns metres
 // into the world when it builds (generator/sketch.py, design_to_drawn).
 let boardMap = null;
-let boardLayer = null;
+let boardEd = null;             // the shared drawing editor (static/js/draw.js)
 let boardSheet = null;          // the rectangle showing the edge of the sheet
 let boardGrid = null;
 // A picture laid over the sheet to draw on top of: a screenshot of a town
@@ -2857,9 +2819,6 @@ let boardGrid = null;
 // It is only ever something to trace, so it is not saved with the drawing -
 // what gets built is what was drawn over it.
 let boardTrace = null;
-let boardKind = null;
-let boardHandler = null;
-let boardPicked = null;
 let boardOpened = null;         // the map whose sheet this is, once it has one
 let boardFitted = false;        // whether the sheet has been framed on screen
 
@@ -2871,7 +2830,6 @@ const BOARD_SNAP_M = 14;
 
 let boardJoin = null;           // the map this sheet is drawn to join
 let boardJoinLayers = null;     // its picture, its outline and its streets
-let boardEditing = false;       // whether what is drawn can be dragged about
 
 function boardSize() {
   const w = parseFloat(document.getElementById('boardWidth').value) || 900;
@@ -2907,7 +2865,7 @@ function boardCells() {
 }
 
 function boardShowCount() {
-  const n = boardLayer ? boardLayer.getLayers().length : 0;
+  const n = boardEd ? boardEd.count : 0;
   const badge = document.getElementById('boardCount');
   const { w, h } = boardSize();
   const cells = boardCells();
@@ -2960,10 +2918,6 @@ function boardFit() {
       boardMap.fitBounds([[0, 0], [h, w]], { padding: [24, 24] });
     }
   }, 0);
-}
-
-function boardStyleFor(kind) {
-  return sketchStyle(kind);
 }
 
 // ---- the map next door ------------------------------------------------------
@@ -3065,176 +3019,22 @@ async function boardLoadJoin() {
   }
 }
 
-// Everything a point could be meant to meet: the neighbour's streets, and the
-// corners of what is already on the sheet.
-function boardSnapPoints(skip) {
-  const out = [];
-  for (const join of (boardJoin && boardJoin.joins) || []) {
-    out.push([join.y, join.x]);
-  }
-  boardLayer.eachLayer(layer => {
-    if (layer === skip || !layer.boardKind) return;
-    const latlngs = layer.getLatLngs ? layer.getLatLngs() : null;
-    const flat = latlngs ? (Array.isArray(latlngs[0]) ? latlngs[0] : latlngs) : [];
-    for (const p of flat) out.push([p.lat, p.lng]);
-    if (!latlngs && layer.getLatLng) {
-      const p = layer.getLatLng();
-      out.push([p.lat, p.lng]);
-    }
-  });
-  return out;
-}
-
-// Move the ends of what was just drawn onto whatever they were aimed at.
-// Done when the shape is finished rather than while it is being drawn: the
-// result is the same and the drawing stays the plain Leaflet one.
-function boardSnap(layer) {
-  if (!document.getElementById('boardSnap').checked) return 0;
-  const targets = boardSnapPoints(layer);
-  if (!targets.length || !layer.getLatLngs) return 0;
-  const latlngs = layer.getLatLngs();
-  const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-  let moved = 0;
-  for (const point of ring) {
-    let best = null;
-    let far = BOARD_SNAP_M;
-    for (const [lat, lng] of targets) {
-      const d = Math.hypot(point.lat - lat, point.lng - lng);
-      if (d > 0 && d <= far) { far = d; best = [lat, lng]; }
-    }
-    if (best) {
-      point.lat = best[0];
-      point.lng = best[1];
-      moved += 1;
-    }
-  }
-  if (moved) layer.setLatLngs(latlngs);
-  return moved;
-}
-
-// How long or how big the thing is, in the units somebody drawing a town
-// thinks in.
-function boardMeasure(layer) {
-  const latlngs = layer.getLatLngs && layer.getLatLngs();
-  if (!latlngs) return '';
-  const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-  if (ring.length < 2) return '';
-  if (layer instanceof L.Polygon) {
-    let twice = 0;
-    for (let i = 0; i < ring.length; i += 1) {
-      const a = ring[i];
-      const b = ring[(i + 1) % ring.length];
-      twice += a.lng * b.lat - b.lng * a.lat;
-    }
-    const area = Math.abs(twice) / 2;
-    return area >= 10000 ? `${(area / 10000).toFixed(2)} ha`
-                         : `${Math.round(area)} m²`;
-  }
-  let run = 0;
-  for (let i = 1; i < ring.length; i += 1) {
-    run += Math.hypot(ring[i].lat - ring[i - 1].lat, ring[i].lng - ring[i - 1].lng);
-  }
-  return `${Math.round(run)} m long`;
-}
-
-function boardAdd(kind, layer, silent) {
-  layer.boardKind = kind;
-  if (layer.setStyle) layer.setStyle(boardStyleFor(kind));
-  layer.bindTooltip(sketchLabel(kind), { sticky: true });
-  layer.on('click', ev => { L.DomEvent.stop(ev); boardPick(layer); });
-  boardLayer.addLayer(layer);
-  if (boardEditing) boardLetDrag(layer, true);
-  boardShowCount();
-  if (!silent) boardNote(`${sketchLabel(kind)} added.`);
-}
-
-// Dragging corners about rather than drawing the whole thing again, which
-// was the only way to move a street a few metres.
-function boardLetDrag(layer, on) {
-  // A line or a shape has corners to drag; a point is dragged whole.
-  const handle = layer.editing || layer.dragging;
-  if (!handle) return;
-  if (on) handle.enable();
-  else handle.disable();
-}
-
-function boardEditMode(on) {
-  boardEditing = on;
-  if (on) boardStop();
-  boardLayer.eachLayer(layer => boardLetDrag(layer, on));
-  const btn = document.getElementById('boardEdit');
-  if (btn) btn.classList.toggle('on', on);
-  boardNote(on ? 'Drag a corner to move it, or the middle of a line to add '
-                 + 'one. Click Move and reshape again to stop.'
-               : 'Back to drawing.');
-}
-
-function boardPick(layer) {
-  if (boardPicked && boardPicked.setStyle) {
-    boardPicked.setStyle(boardStyleFor(boardPicked.boardKind));
-  }
-  boardPicked = layer;
-  const dupe = document.getElementById('boardDupe');
-  if (dupe) dupe.disabled = !layer;
-  const box = document.getElementById('boardPicked');
-  if (!layer) { box.hidden = true; box.innerHTML = ''; return; }
-  layer.setStyle({ color: '#ff5f5f', weight: 4 });
-  box.hidden = false;
-  const size = boardMeasure(layer);
-  box.innerHTML = `<span class="hint">${escapeHtml(sketchLabel(layer.boardKind))}`
-    + `${size ? ` · ${size}` : ''}</span>
-    <button type="button" id="boardDelete" class="btn">Remove</button>`;
-  document.getElementById('boardDelete').addEventListener('click', () => {
-    boardLayer.removeLayer(layer);
-    boardPick(null);
-    boardShowCount();
-    boardNote('Removed.');
-  });
-}
-
-function boardStop() {
-  if (boardHandler) { boardHandler.disable(); boardHandler = null; }
-  boardKind = null;
-  for (const b of document.querySelectorAll('#boardPalette .sketch-pick')) {
-    b.classList.remove('on');
-  }
-}
-
-function boardStart(kind, geometry) {
-  boardStop();
-  boardPick(null);
-  boardKind = kind;
-  const style = boardStyleFor(kind);
-  if (geometry === 'line') {
-    boardHandler = new L.Draw.Polyline(boardMap, { shapeOptions: style });
-  } else if (geometry === 'area') {
-    boardHandler = new L.Draw.Polygon(boardMap, {
-      allowIntersection: false, shapeOptions: style });
-  } else {
-    boardHandler = new L.Draw.Marker(boardMap, {});
-  }
-  boardHandler.enable();
-  for (const b of document.querySelectorAll('#boardPalette .sketch-pick')) {
-    b.classList.toggle('on', b.dataset.kind === kind);
-  }
-  boardNote(`Drawing ${sketchLabel(kind)}. Double-click to finish.`);
+// The streets of the map next door, which a road drawn to the border should
+// meet. The editor adds the corners of what is already on the sheet.
+function boardJoinPoints() {
+  return ((boardJoin && boardJoin.joins) || []).map(j => [j.y, j.x]);
 }
 
 function boardPaletteInto(box) {
   box.innerHTML = paletteMarkup();
   runListSearch(box.id);
-  box.addEventListener('click', ev => {
-    const btn = ev.target.closest('.sketch-pick');
-    if (btn) boardStart(btn.dataset.kind, btn.dataset.geometry);
-  });
 }
 
 // What is on the sheet, in metres, as the server stores and reads it.
 function boardDesign() {
   const { w, h } = boardSize();
   const features = [];
-  boardLayer.eachLayer(layer => {
-    if (!layer.boardKind) return;
+  boardEd.each((layer, kind) => {
     const geo = layer.toGeoJSON().geometry;
     let ring;
     if (geo.type === 'Polygon') ring = geo.coordinates[0];
@@ -3246,7 +3046,7 @@ function boardDesign() {
     // 900 m sheet is simply off the map, which is not what somebody dragging
     // a street to the edge of the page meant.
     const clamp = (v, hi) => Math.min(Math.max(v, 0), hi);
-    features.push({ kind: layer.boardKind,
+    features.push({ kind,
                     points: ring.map(([x, y]) => [clamp(x, w), clamp(y, h)]) });
   });
   return { width_m: w, height_m: h,
@@ -3254,12 +3054,11 @@ function boardDesign() {
 }
 
 function boardLoadDesign(design) {
-  boardLayer.clearLayers();
-  boardPick(null);
-  if (!design) { boardShowCount(); return; }
+  if (!design) { boardEd.replace([]); boardShowCount(); return; }
   document.getElementById('boardWidth').value = design.width_m || 900;
   document.getElementById('boardHeight').value = design.height_m || 900;
   boardDrawSheet();
+  const items = [];
   for (const f of design.features || []) {
     const entry = sketchPalette.find(e => e.id === f.kind);
     if (!entry) continue;
@@ -3268,8 +3067,9 @@ function boardLoadDesign(design) {
     if (entry.geometry === 'area' && pts.length >= 3) layer = L.polygon(pts);
     else if (entry.geometry === 'line' && pts.length >= 2) layer = L.polyline(pts);
     else if (entry.geometry === 'point' && pts.length) layer = L.marker(pts[0]);
-    if (layer) boardAdd(f.kind, layer, true);
+    if (layer) items.push({ kind: f.kind, layer });
   }
+  boardEd.replace(items);
   boardFit();
   boardShowCount();
 }
@@ -3293,18 +3093,20 @@ function boardOpen(mapName) {
     // on it or measured against it; fitting the sheet refines this a moment
     // later, once the panel it lives in has a size.
     boardMap.setView([450, 450], 0);
-    boardLayer = new L.FeatureGroup().addTo(boardMap);
-    boardMap.on(L.Draw.Event.CREATED, e => {
-      const kind = boardKind;
-      boardStop();
-      if (!kind) return;
-      const joined = boardSnap(e.layer);
-      boardAdd(kind, e.layer);
-      if (joined) {
-        boardNote(`${sketchLabel(kind)} added, ${joined} `
-          + `end${joined === 1 ? '' : 's'} joined up.`);
-      }
+    let refreshBoardTools = () => {};
+    boardEd = KnoxDraw.create(boardMap, {
+      style: kind => sketchStyle(kind),
+      label: kind => sketchLabel(kind),
+      note: boardNote,
+      pickedBox: document.getElementById('boardPicked'),
+      palette: document.getElementById('boardPalette'),
+      active: () => !document.getElementById('board').hidden,
+      snapOn: () => document.getElementById('boardSnap').checked,
+      snapDist: BOARD_SNAP_M,
+      snapExtra: boardJoinPoints,
+      onChange: () => { boardShowCount(); refreshBoardTools(); },
     });
+    refreshBoardTools = KnoxDraw.toolbar(document.getElementById('boardTools'), boardEd);
     // The first size the map gets may arrive after it was opened, if the
     // window was behind another one at the time.
     boardMap.on('resize', () => {
@@ -3400,50 +3202,9 @@ document.getElementById('boardMatchEdge').addEventListener('click', () => {
     + 'the side they share.');
 });
 
-document.getElementById('boardEdit').addEventListener('click', () =>
-  boardEditMode(!boardEditing));
-
-document.getElementById('boardDupe').addEventListener('click', () => {
-  if (!boardPicked) return;
-  const kind = boardPicked.boardKind;
-  const shift = ([lat, lng]) => [lat - 20, lng + 20];
-  let copy = null;
-  if (boardPicked.getLatLngs) {
-    const latlngs = boardPicked.getLatLngs();
-    const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
-    const moved = ring.map(p => shift([p.lat, p.lng]));
-    copy = boardPicked instanceof L.Polygon ? L.polygon(moved) : L.polyline(moved);
-  } else if (boardPicked.getLatLng) {
-    const p = boardPicked.getLatLng();
-    copy = L.marker(shift([p.lat, p.lng]));
-  }
-  if (!copy) return;
-  boardAdd(kind, copy, true);
-  boardPick(copy);
-  boardNote(`${sketchLabel(kind)} copied, twenty metres along.`);
-});
-
-// Delete takes out what is picked; Escape stops drawing, as it does
-// everywhere else.
-document.addEventListener('keydown', ev => {
-  if (document.getElementById('board').hidden) return;
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target.tagName || ''));
-  if (typing) return;
-  if (ev.key === 'Escape' && boardKind) {
-    boardStop();
-    boardNote('Stopped drawing.');
-  } else if ((ev.key === 'Delete' || ev.key === 'Backspace') && boardPicked) {
-    const gone = boardPicked;
-    boardPick(null);
-    boardLayer.removeLayer(gone);
-    boardShowCount();
-    boardNote('Removed.');
-  }
-});
-
 document.getElementById('boardClose').addEventListener('click', () => {
-  boardStop();
-  if (boardEditing) boardEditMode(false);
+  boardEd.stop();
+  if (boardEd.editing) boardEd.setEditing(false);
   document.getElementById('board').hidden = true;
 });
 
@@ -3497,22 +3258,6 @@ document.getElementById('boardTraceOff').addEventListener('click', () => {
   boardTrace = null;
   boardTraceShow(false);
   boardNote('Picture removed.');
-});
-
-document.getElementById('boardUndo').addEventListener('click', () => {
-  const layers = boardLayer.getLayers();
-  if (!layers.length) return;
-  boardLayer.removeLayer(layers[layers.length - 1]);
-  boardPick(null);
-  boardShowCount();
-  boardNote('Last thing removed.');
-});
-
-document.getElementById('boardClear').addEventListener('click', () => {
-  boardLayer.clearLayers();
-  boardPick(null);
-  boardShowCount();
-  boardNote('Sheet cleared.');
 });
 
 function boardMapName() {
@@ -3609,9 +3354,12 @@ document.getElementById('boardBuild').addEventListener('click', async () => {
 // read is a dial that does nothing.
 const zoneLayer = new L.FeatureGroup().addTo(map);
 let zoneMeta = null;            // {settings: [...], styles: [...]}
-let zoneList = [];              // [{name, ring, settings, wall_style, layer}]
+// [{name, ring, settings, wall_style, presets, layer}], always in the order of
+// the shapes on the map: the editor (static/js/draw.js) owns the shapes, and
+// each carries its zone as `layer.kdMeta`, so undo brings back a zone's
+// settings with its outline. zoneList is rebuilt from them (zonesSync).
+let zoneList = [];
 let zonePicked = -1;
-let zoneDrawer = null;
 
 const ZONE_STYLE = { color: '#8f7ad6', weight: 2, dashArray: '5,4', fillOpacity: 0.12 };
 const ZONE_PICKED = { color: '#c9a8ff', weight: 3, dashArray: null, fillOpacity: 0.25 };
@@ -3656,8 +3404,15 @@ function zoneNote(text) {
   if (box) box.textContent = text || '';
 }
 
+let zoneCommitTimer = null;
 function zoneDirty(on) {
   document.getElementById('zoneSave').disabled = !on;
+  // A name or a setting changed: that is an undoable step too, but only once
+  // the typing stops rather than once a keystroke.
+  if (on) {
+    clearTimeout(zoneCommitTimer);
+    zoneCommitTimer = setTimeout(() => zoneEd.commit(), 600);
+  }
 }
 
 function showZoneCount() {
@@ -3697,6 +3452,8 @@ function zonePick(i) {
   for (const z of zoneList) if (z.layer) z.layer.setStyle(ZONE_STYLE);
   const zone = zoneList[i];
   if (zone && zone.layer) zone.layer.setStyle(ZONE_PICKED);
+  const layer = zone && zone.layer ? zone.layer : null;
+  if (zoneEd.picked !== layer) zoneEd.pick(layer);
   drawZoneList();
   drawZoneEditor();
 }
@@ -3791,80 +3548,102 @@ function drawZoneEditor() {
   }
 }
 
-function addZoneLayer(zone) {
-  const layer = L.polygon(zone.ring.map(([lon, lat]) => [lat, lon]), ZONE_STYLE);
-  layer.on('click', ev => { L.DomEvent.stop(ev); zonePick(zoneList.indexOf(zone)); });
+// The editor owns the outline; this is what the page adds to it. The zone is
+// kept off the data the editor snapshots (its layer would be a loop).
+const zoneEd = KnoxDraw.create(map, {
+  group: zoneLayer,
+  style: () => ZONE_STYLE,
+  pickedStyle: ZONE_PICKED,
+  label: () => 'Zone',
+  note: text => zoneNote(text),
   // Sticky, so where zones overlap the label follows the pointer and names
   // the one it is actually over rather than the one it started on.
-  layer.bindTooltip(zoneTip(zone, zoneList.indexOf(zone)),
-                    { sticky: true, className: 'zone-tip' });
-  layer.on('mouseover', () => zoneDress(zone, true));
-  layer.on('mouseout', () => zoneDress(zone, false));
-  zoneLayer.addLayer(layer);
-  zone.layer = layer;
-}
+  tooltip: layer => zoneTip(layer.kdMeta || {}, zoneList.indexOf(layer.kdMeta)),
+  tooltipOptions: { sticky: true, className: 'zone-tip' },
+  newMeta: () => ({ name: `Zone ${zoneList.length + 1}`, settings: {} }),
+  cloneMeta: m => Object.assign(m, { name: `${m.name || 'Zone'} copy` }),
+  active: () => document.getElementById('zonesPanel').open
+                && document.getElementById('board').hidden,
+  listen: false,
+  onStart: () => { sketchEd.stop(); disarmAreaToolbar(); },
+  onAttach: layer => {
+    layer.on('mouseover', () => zoneDress(layer.kdMeta, true));
+    layer.on('mouseout', () => zoneDress(layer.kdMeta, false));
+  },
+  onPick: layer => {
+    const i = layer ? zoneList.indexOf(layer.kdMeta) : -1;
+    if (i !== zonePicked) zonePick(i);
+  },
+  onClaimed: layer => {
+    zonePick(zoneList.indexOf(layer.kdMeta));
+    zoneNote('Zone drawn. Set what is different about it, then save.');
+  },
+  onChange: state => {
+    refreshZoneTools();
+    if (state.rev === zoneRev) return;
+    zoneRev = state.rev;
+    zonesSync();
+    if (!zoneLoading) zoneDirty(true);
+  },
+});
+let refreshZoneTools = () => {};
+let zoneRev = 0;
+let zoneLoading = false;
+refreshZoneTools = KnoxDraw.toolbar(document.getElementById('zoneTools'), zoneEd);
 
-async function loadZones(mapName) {
-  await loadZoneMeta();
-  zoneLayer.clearLayers();
+// zoneList from the shapes, after any change to them.
+function zonesSync() {
+  const was = zoneList[zonePicked];
   zoneList = [];
-  zonePicked = -1;
-  if (mapName) {
-    try {
-      const data = await (await fetch(`/api/zones/${encodeURIComponent(mapName)}`)).json();
-      for (const z of data.zones || []) {
-        const zone = { name: z.name, ring: z.ring, settings: z.settings || {},
-                       wall_style: z.wall_style, presets: z.presets };
-        zoneList.push(zone);
-        addZoneLayer(zone);
-      }
-    } catch { /* a map with no zones simply has none */ }
-  }
-  zoneDirty(false);
+  zoneEd.each(layer => {
+    const zone = layer.kdMeta;
+    Object.defineProperty(zone, 'layer', { value: layer, writable: true,
+                                           configurable: true, enumerable: false });
+    // Off the enumerable data too: the editor snapshots it for undo, and the
+    // outline is already there.
+    Object.defineProperty(zone, 'ring', { value: layer.toGeoJSON().geometry.coordinates[0],
+                                          writable: true, configurable: true,
+                                          enumerable: false });
+    zoneList.push(zone);
+  });
+  zonePicked = zoneList.indexOf(was);
   drawZoneList();
   drawZoneEditor();
 }
 
+async function loadZones(mapName) {
+  await loadZoneMeta();
+  const items = [];
+  if (mapName) {
+    try {
+      const data = await (await fetch(`/api/zones/${encodeURIComponent(mapName)}`)).json();
+      for (const z of data.zones || []) {
+        items.push({
+          kind: 'zone',
+          layer: L.polygon(z.ring.map(([lon, lat]) => [lat, lon])),
+          meta: { name: z.name, settings: z.settings || {},
+                  wall_style: z.wall_style, presets: z.presets },
+        });
+      }
+    } catch { /* a map with no zones simply has none */ }
+  }
+  zoneLoading = true;
+  zoneEd.replace(items);
+  zoneLoading = false;
+  zoneDirty(false);
+}
+
 document.getElementById('zoneDraw').addEventListener('click', () => {
   loadZoneMeta().then(() => {
-    if (zoneDrawer) zoneDrawer.disable();
-    zoneDrawer = new L.Draw.Polygon(map, {
-      allowIntersection: false, shapeOptions: ZONE_STYLE });
-    zoneDrawer.enable();
-    zoneDrawing = true;
+    zoneEd.start('zone', 'area');
     zoneNote('Draw round the part of the map this zone covers; double-click to finish.');
   });
 });
 
-// Whichever of the three is armed owns the shape that comes back; this is the
-// third, so it is checked before the area selection falls through to it.
-let zoneDrawing = false;
-
-function zoneTookShape(layer) {
-  if (!zoneDrawing) return false;
-  zoneDrawing = false;
-  zoneDrawer = null;
-  const ring = layer.toGeoJSON().geometry.coordinates[0]
-    .map(([lon, lat]) => [lon, lat]);
-  const zone = { name: `Zone ${zoneList.length + 1}`, ring, settings: {} };
-  zoneList.push(zone);
-  addZoneLayer(zone);
-  zonePick(zoneList.length - 1);
-  zoneDirty(true);
-  zoneNote('Zone drawn. Set what is different about it, then save.');
-  return true;
-}
-
 document.getElementById('zoneList').addEventListener('click', ev => {
   const drop = ev.target.closest('[data-drop]');
   if (drop) {
-    const i = parseInt(drop.dataset.drop, 10);
-    if (zoneList[i].layer) zoneLayer.removeLayer(zoneList[i].layer);
-    zoneList.splice(i, 1);
-    zonePicked = -1;
-    zoneDirty(true);
-    drawZoneList();
-    drawZoneEditor();
+    zoneEd.remove(zoneList[parseInt(drop.dataset.drop, 10)].layer);
     return;
   }
   const row = ev.target.closest('li[data-i]');
@@ -3923,7 +3702,12 @@ let bdDesign = null;            // what is drawn
 let bdLevel = 0;                // the storey being drawn
 let bdRoom = '';                // the picked room ('' is the eraser)
 let bdHistory = [];
+let bdFuture = [];              // what Redo brings back
 let bdBusy = false;
+// The picked room, by where it is rather than by its place in the list: the
+// server hands the design back cleaned up, so an index does not survive a
+// round trip but a rectangle on a storey does.
+let bdSel = null;               // {level, x, y, w, h} or null
 
 function bdNote(text) {
   const box = document.getElementById('bdNote');
@@ -4100,7 +3884,108 @@ function bdApplyEdit(idx, rect) {
   next.rooms.splice(idx, 1);
   next.rooms.push({ level: room.level, x: rect.x, y: rect.y,
                     w: rect.w, h: rect.h, kind: room.kind });
+  bdSel = { level: room.level, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
   bdRefresh(next);
+}
+
+function bdSelIndex() {
+  if (!bdSel || !bdDesign) return -1;
+  const rooms = bdDesign.rooms || [];
+  for (let i = rooms.length - 1; i >= 0; i -= 1) {
+    const r = rooms[i];
+    if (r.level === bdSel.level && r.x === bdSel.x && r.y === bdSel.y
+        && r.w === bdSel.w && r.h === bdSel.h) return i;
+  }
+  return -1;
+}
+
+function bdRoomLabel(id) {
+  const found = ((bdMeta && bdMeta.rooms) || []).find(r => r.id === id);
+  return found ? found.label : (id || 'Cut away');
+}
+
+// A box over the plan in tile coordinates; shared by the drag outline and the
+// outline of the picked room.
+function bdPlaceBox(el, x0, y0, w, h) {
+  const plan = document.getElementById('bdPlan');
+  const img = document.getElementById('bdImage');
+  const box = img.getBoundingClientRect();
+  if (!bdDesign || !box.width) { el.hidden = true; return; }
+  const plot = plan.getBoundingClientRect();
+  const tw = box.width / bdDesign.width;
+  const th = box.height / bdDesign.height;
+  el.hidden = false;
+  el.style.left = `${box.left - plot.left + x0 * tw}px`;
+  el.style.top = `${box.top - plot.top + y0 * th}px`;
+  el.style.width = `${w * tw}px`;
+  el.style.height = `${h * th}px`;
+}
+
+function bdShowSel() {
+  const el = document.getElementById('bdSelBox');
+  const i = bdSelIndex();
+  if (i < 0 || bdSel.level !== bdLevel) {
+    if (i < 0) bdSel = null;
+    el.hidden = true;
+    return;
+  }
+  bdPlaceBox(el, bdSel.x, bdSel.y, bdSel.w, bdSel.h);
+}
+
+function bdSelect(room) {
+  bdSel = room ? { level: room.level, x: room.x, y: room.y, w: room.w, h: room.h } : null;
+  bdShowSel();
+  if (room) {
+    bdNote(`${bdRoomLabel(room.kind)}, ${room.w}×${room.h} tiles. Arrow keys move it `
+      + '(Shift for five tiles), Delete removes it, Ctrl+D copies it, Escape lets go.');
+  }
+}
+
+function bdDeleteSel() {
+  const i = bdSelIndex();
+  if (i < 0 || bdBusy) return;
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  next.rooms.splice(i, 1);
+  bdSel = null;
+  bdRefresh(next);
+}
+
+function bdDuplicateSel() {
+  const i = bdSelIndex();
+  if (i < 0 || bdBusy) return;
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  const r = next.rooms[i];
+  const at = bdResized(r, '', 2, 2);
+  next.rooms.push({ level: r.level, x: at.x, y: at.y, w: at.w, h: at.h, kind: r.kind });
+  bdSel = { level: r.level, ...at };
+  bdRefresh(next);
+}
+
+function bdNudgeSel(dx, dy) {
+  const i = bdSelIndex();
+  if (i < 0 || bdBusy) return;
+  const r = bdDesign.rooms[i];
+  const to = bdResized(r, '', dx, dy);
+  if (to.x === r.x && to.y === r.y) return;
+  bdApplyEdit(i, to);
+}
+
+// Copy this floor onto the one above it, adding the floor if there is not one.
+function bdCopyFloorUp() {
+  if (!bdDesign || bdBusy) return;
+  const to = bdLevel + 1;
+  if (to >= 8) { bdNote('That is the top: a building has up to eight storeys.'); return; }
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  if (to >= next.storeys) next.storeys = to + 1;
+  const copy = next.rooms.filter(r => r.level === bdLevel)
+    .map(r => ({ ...r, level: to }));
+  next.rooms = next.rooms.filter(r => r.level !== to).concat(copy);
+  bdSel = null;
+  bdRefresh(next, to);
+  bdNote(`This floor copied up to ${to === 0 ? 'the ground floor' : 'floor ' + to}.`);
 }
 
 function bdRoomsMarkup() {
@@ -4188,7 +4073,9 @@ function bdShow(data) {
   if (data.image) img.src = data.image;
   document.getElementById('bdEmpty').hidden = data.painted > 0;
   document.getElementById('bdUndo').disabled = !bdHistory.length;
+  document.getElementById('bdRedo').disabled = !bdFuture.length;
   drawBdStoreys();
+  bdShowSel();
   bdFields();
 
   const tally = document.getElementById('bdTally');
@@ -4235,6 +4122,21 @@ async function bdRefresh(design, level) {
 function bdRemember() {
   bdHistory.push(JSON.stringify(bdDesign));
   if (bdHistory.length > 40) bdHistory.shift();
+  bdFuture = [];              // a new change ends the road forward
+}
+
+function bdUndo() {
+  const was = bdHistory.pop();
+  if (!was || bdBusy) { if (was) bdHistory.push(was); return; }
+  bdFuture.push(JSON.stringify(bdDesign));
+  bdRefresh(JSON.parse(was));
+}
+
+function bdRedo() {
+  const next = bdFuture.pop();
+  if (!next || bdBusy) { if (next) bdFuture.push(next); return; }
+  bdHistory.push(JSON.stringify(bdDesign));
+  bdRefresh(JSON.parse(next));
 }
 
 function bdDraw(x0, y0, x1, y1) {
@@ -4257,7 +4159,9 @@ async function bdStart() {
     bdDesign = { name: '', kind: '', style: '', width: 20, height: 16,
                  storeys: 1, rooms: [] };
     bdHistory = [];
+    bdFuture = [];
   }
+  bdSel = null;
   drawBdRooms();
   await bdRefresh(bdDesign, 0);
   bdNote('Pick a room, then drag a rectangle on the plan. Adjust rooms moves the walls of one already drawn.');
@@ -4269,6 +4173,8 @@ async function bdOpenSaved(name) {
     const out = await res.json();
     if (!res.ok) throw bdApiError(out, res);
     bdHistory = [];
+    bdFuture = [];
+    bdSel = null;
     bdShow(out);
     await bdLoad(out.design.kind || '');
     drawBdRooms();
@@ -4312,6 +4218,7 @@ document.getElementById('bdRooms').addEventListener('click', ev => {
 document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
   const btn = ev.target.closest('[data-storey]');
   if (btn) bdRefresh(bdDesign, parseInt(btn.dataset.storey, 10));
+  bdShowSel();
 });
 
 // Dragging a rectangle on the plan. The outline follows the pointer as a box
@@ -4324,16 +4231,9 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
   let grab = null;                // the room being adjusted, and where by
 
   function placeBox(x0, y0, w, h) {
-    const img = document.getElementById('bdImage');
-    const box = img.getBoundingClientRect();
-    const plot = plan.getBoundingClientRect();
-    const tw = box.width / bdDesign.width;
-    const th = box.height / bdDesign.height;
-    ghost.hidden = false;
-    ghost.style.left = `${box.left - plot.left + x0 * tw}px`;
-    ghost.style.top = `${box.top - plot.top + y0 * th}px`;
-    ghost.style.width = `${w * tw}px`;
-    ghost.style.height = `${h * th}px`;
+    bdPlaceBox(ghost, x0, y0, w, h);
+    // How big it is, as it is dragged: tiles are what the sheet is measured in.
+    ghost.dataset.size = `${w} × ${h}`;
   }
 
   function place(a, b) {
@@ -4357,6 +4257,7 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
                + 'that wall, its middle to move the room.');
         return;
       }
+      bdSelect(found.r);
       grab = { idx: found.i, r: found.r, at,
                edge: bdGrip(found.r, at.x, at.y) };
       placeBox(found.r.x, found.r.y, found.r.w, found.r.h);
@@ -4368,6 +4269,13 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
 
   // What the pointer would take hold of, before it does.
   plan.addEventListener('pointermove', ev => {
+    const hover = document.getElementById('bdHover');
+    const here = bdDesign && bdTileAt(ev);
+    if (here) {
+      const found = bdRoomAt(here.x, here.y);
+      hover.textContent = `${here.x}, ${here.y}`
+        + (found ? ` · ${bdRoomLabel(found.r.kind)} ${found.r.w}×${found.r.h}` : '');
+    }
     if (grab || from || !bdDesign) return;
     if (bdMode !== 'adjust') { plan.style.cursor = ''; return; }
     const at = bdTileAt(ev);
@@ -4414,12 +4322,33 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
     from = null;
     bdDraw(started.x, started.y, now.x, now.y);
   });
+  window.addEventListener('resize', bdShowSel);
   window.addEventListener('pointercancel', () => {
     from = null;
     grab = null;
     ghost.hidden = true;
   });
 })();
+
+document.addEventListener('keydown', ev => {
+  if (document.getElementById('builder').hidden) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName || '')) return;
+  const mod = ev.ctrlKey || ev.metaKey;
+  const key = ev.key.toLowerCase();
+  if (mod && key === 'z') { ev.preventDefault(); if (ev.shiftKey) bdRedo(); else bdUndo(); }
+  else if (mod && key === 'y') { ev.preventDefault(); bdRedo(); }
+  else if (mod && key === 'd') { ev.preventDefault(); bdDuplicateSel(); }
+  else if (ev.key === 'Escape') { bdSelect(null); }
+  else if ((ev.key === 'Delete' || ev.key === 'Backspace') && bdSel) {
+    ev.preventDefault();
+    bdDeleteSel();
+  } else if (bdSel && ev.key.startsWith('Arrow')) {
+    ev.preventDefault();
+    const n = ev.shiftKey ? 5 : 1;
+    bdNudgeSel(ev.key === 'ArrowLeft' ? -n : ev.key === 'ArrowRight' ? n : 0,
+               ev.key === 'ArrowUp' ? -n : ev.key === 'ArrowDown' ? n : 0);
+  }
+});
 
 for (const id of ['bdWidth', 'bdHeight', 'bdStoreys']) {
   document.getElementById(id).addEventListener('change', () => {
@@ -4474,11 +4403,9 @@ document.getElementById('bdFill').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('bdUndo').addEventListener('click', () => {
-  const was = bdHistory.pop();
-  if (!was) return;
-  bdRefresh(JSON.parse(was));
-});
+document.getElementById('bdUndo').addEventListener('click', bdUndo);
+document.getElementById('bdRedo').addEventListener('click', bdRedo);
+document.getElementById('bdCopyUp').addEventListener('click', bdCopyFloorUp);
 
 document.getElementById('bdClear').addEventListener('click', () => {
   if (!bdDesign) return;
@@ -4536,6 +4463,10 @@ let placePreview = null;        // this map's own picture, once it has loaded
 const placePictures = {};       // the game's own maps, by name, once loaded
 let placeRoad = [];             // a road being drawn, in world tiles
 let placeDrawingRoad = false;
+// What part of the world the canvas is showing: how far in, and the world
+// tile at its top-left corner. Zoom 1 is the whole world.
+const placeView = { zoom: 1, x: 0, y: 0 };
+const PLACE_MAX_ZOOM = 24;
 
 const PLACE_PAD = 8;            // cells of empty grid round what is drawn
 const PLACE_MIN_SPAN = 110;     // never zoom in closer than this many cells
@@ -4587,10 +4518,41 @@ function placeSpan() {
   return { w: right + PLACE_PAD * k, h: down + PLACE_PAD * k };
 }
 
-function placeScale() {
+function placeFitScale() {
   const canvas = document.getElementById('placeCanvas');
   const span = placeSpan();
   return Math.min(canvas.width / span.w, canvas.height / span.h);
+}
+
+// Canvas pixels per world tile, zoom included.
+function placeScale() {
+  return placeFitScale() * placeView.zoom;
+}
+
+// Keep the view on the world: not scrolled past its edges.
+function placeClampView() {
+  const canvas = document.getElementById('placeCanvas');
+  const span = placeSpan();
+  const k = placeScale();
+  placeView.x = Math.max(0, Math.min(placeView.x, span.w - canvas.width / k));
+  placeView.y = Math.max(0, Math.min(placeView.y, span.h - canvas.height / k));
+  if (placeView.zoom <= 1) { placeView.x = 0; placeView.y = 0; }
+}
+
+// Zoom by `factor`, keeping the world tile under (px, py) - canvas pixels -
+// where it is, so the wheel zooms into what the pointer is on.
+function placeZoomBy(factor, px, py) {
+  const canvas = document.getElementById('placeCanvas');
+  if (px === undefined) { px = canvas.width / 2; py = canvas.height / 2; }
+  const before = placeScale();
+  const tx = px / before + placeView.x;
+  const ty = py / before + placeView.y;
+  placeView.zoom = Math.max(1, Math.min(PLACE_MAX_ZOOM, placeView.zoom * factor));
+  const after = placeScale();
+  placeView.x = tx - px / after;
+  placeView.y = ty - py / after;
+  placeClampView();
+  drawWorld();
 }
 
 function hits(a, b) {
@@ -4599,15 +4561,28 @@ function hits(a, b) {
 }
 
 function placeClashes(corner) {
-  if (!placeWorld) return [];
+  if (!placeWorld || placeWorld.standalone) return [];
   const k = placeTiles();
   const mine = { x: corner.x * k, y: corner.y * k,
                  w: placeWorld.map.w * k, h: placeWorld.map.h * k };
   const names = new Set();
   for (const rect of placeOtherRects()) {
+    // Knox County under the map is not a clash: it is what the map replaces.
+    if (rect.kind === 'vanilla') continue;
     if (hits(mine, rect)) names.add(rect.name);
   }
   return [...names];
+}
+
+// The vanilla cells this map would stand on, which it replaces. A standalone
+// map has no vanilla world to replace.
+function placeReplaces(corner) {
+  if (!placeWorld || placeWorld.standalone) return [];
+  const k = placeTiles();
+  const mine = { x: corner.x * k, y: corner.y * k,
+                 w: placeWorld.map.w * k, h: placeWorld.map.h * k };
+  return placeOtherRects().some(r => r.kind === 'vanilla' && hits(mine, r))
+    ? [placeWorld.vanilla.name] : [];
 }
 
 function drawWorld() {
@@ -4619,6 +4594,9 @@ function drawWorld() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#0d100c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  placeClampView();
+  ctx.save();
+  ctx.translate(-placeView.x * k, -placeView.y * k);
 
   // The grid, every ten cells, so distances are readable.
   const span = placeSpan();
@@ -4694,6 +4672,7 @@ function drawWorld() {
       ctx.fill();
     }
   }
+  ctx.restore();
 }
 
 function placeSummary() {
@@ -4706,6 +4685,8 @@ function placeSummary() {
 function placeFields() {
   const mine = placePicked || (placeWorld && placeWorld.map);
   if (!mine) return;
+  const box = document.getElementById('placeStandalone');
+  if (box && placeWorld) box.checked = !!placeWorld.standalone;
   document.getElementById('placeX').value = mine.x;
   document.getElementById('placeY').value = mine.y;
   placeSummary();
@@ -4718,12 +4699,18 @@ function placeState() {
   const tiles = placeTiles();
   const where = `Cell ${mine.x},${mine.y} - world tile `
     + `${mine.x * tiles},${mine.y * tiles}.`;
+  const replaces = placeReplaces(mine);
   if (clash.length) {
     placeNote(`${where} It would sit on top of ${clash.join(' and ')}, and the `
       + 'game would read one map’s cells for the other.', true);
   } else if (!placeWorld.lotsMatch) {
     placeNote(`${where} The map has moved since it was compiled - compile it `
       + 'again before installing.', true);
+  } else if (placeWorld.standalone) {
+    placeNote(`${where} Standalone: the whole world is this map.`);
+  } else if (replaces.length) {
+    placeNote(`${where} This replaces the ${replaces[0]} cells under it. Load the `
+      + 'map ahead of Muldraugh, KY: SERVER SETUP.txt has the lines.');
   } else {
     placeNote(where);
   }
@@ -4768,7 +4755,8 @@ function placeAt(ev) {
   const rect = canvas.getBoundingClientRect();
   const k = placeScale();
   const scale = canvas.width / rect.width;   // drawn at its own size, shown scaled
-  return [(ev.clientX - rect.left) * scale / k, (ev.clientY - rect.top) * scale / k];
+  return [(ev.clientX - rect.left) * scale / k + placeView.x,
+          (ev.clientY - rect.top) * scale / k + placeView.y];
 }
 
 function placeFromEvent(ev) {
@@ -4794,8 +4782,25 @@ function placeFromEvent(ev) {
     placeFields();
     placeState();
   };
+  // The middle button drags the view about; the left one picks where the map
+  // goes. Pointer position in canvas pixels, whatever size it is shown at.
+  let panning = null;
+  const canvasPx = ev => {
+    const box = canvas.getBoundingClientRect();
+    const f = canvas.width / box.width;
+    return [(ev.clientX - box.left) * f, (ev.clientY - box.top) * f];
+  };
   canvas.addEventListener('pointerdown', ev => {
     if (!placeWorld) return;
+    if (ev.button === 1) {
+      ev.preventDefault();                  // no autoscroll circle
+      const [px, py] = canvasPx(ev);
+      panning = { px, py, x: placeView.x, y: placeView.y };
+      canvas.setPointerCapture(ev.pointerId);
+      return;
+    }
+    if (ev.button !== 0) return;
+    canvas.focus({ preventScroll: true });
     if (placeDrawingRoad) {
       placeRoad.push(placeAt(ev).map(Math.round));
       drawWorld();
@@ -4806,9 +4811,47 @@ function placeFromEvent(ev) {
     canvas.setPointerCapture(ev.pointerId);
     pick(ev);
   });
-  canvas.addEventListener('pointermove', ev => { if (placeDragging) pick(ev); });
-  canvas.addEventListener('pointerup', () => { placeDragging = false; });
-  canvas.addEventListener('pointercancel', () => { placeDragging = false; });
+  canvas.addEventListener('pointermove', ev => {
+    if (panning) {
+      const [px, py] = canvasPx(ev);
+      const k = placeScale();
+      placeView.x = panning.x - (px - panning.px) / k;
+      placeView.y = panning.y - (py - panning.py) / k;
+      drawWorld();
+      return;
+    }
+    if (placeDragging) pick(ev);
+  });
+  const release = () => { placeDragging = false; panning = null; };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('auxclick', ev => ev.preventDefault());
+  canvas.addEventListener('wheel', ev => {
+    if (!placeWorld) return;
+    ev.preventDefault();                    // the page does not scroll under it
+    const [px, py] = canvasPx(ev);
+    placeZoomBy(ev.deltaY < 0 ? 1.25 : 1 / 1.25, px, py);
+  }, { passive: false });
+  // + and - zoom while the pointer is over the map or it has focus; 0 shows
+  // the whole world again. Not when typing in one of the boxes.
+  let over = false;
+  canvas.addEventListener('pointerenter', () => { over = true; });
+  canvas.addEventListener('pointerleave', () => { over = false; });
+  document.addEventListener('keydown', ev => {
+    if (!placeWorld || !(over || document.activeElement === canvas)) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName || '')) return;
+    if (ev.key === '+' || ev.key === '=') placeZoomBy(1.4);
+    else if (ev.key === '-' || ev.key === '_') placeZoomBy(1 / 1.4);
+    else if (ev.key === '0') { placeView.zoom = 1; drawWorld(); }
+    else return;
+    ev.preventDefault();
+  });
+  document.getElementById('placeZoomIn').addEventListener('click', () => placeZoomBy(1.4));
+  document.getElementById('placeZoomOut').addEventListener('click', () => placeZoomBy(1 / 1.4));
+  document.getElementById('placeZoomFit').addEventListener('click', () => {
+    placeView.zoom = 1;
+    drawWorld();
+  });
   canvas.addEventListener('dblclick', () => {
     if (placeDrawingRoad) stopRoad();
   });
@@ -4833,8 +4876,10 @@ for (const id of ['placeX', 'placeY']) {
 function sayIfInstallable() {
   const btn = document.getElementById('installBtn');
   if (placeWorld && placeWorld.compiled && !placeWorld.lotsMatch) {
-    note('installNote', 'This map has been moved since it was compiled. '
-      + 'Compile it again, then install.', 'bad');
+    note('installNote', 'This map was moved after it was compiled. '
+      + 'Compile it again (step 5), then install.', 'bad');
+    note('compileNote', 'The map was moved on the world map since the last '
+      + 'compile. Compile it again.', 'warn');
     btn.disabled = true;
     return false;
   }
@@ -4873,6 +4918,11 @@ document.getElementById('placeApply').addEventListener('click', () => {
   if (!mine) return;
   putMapAt({ method: 'POST', headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ cell_x: mine.x, cell_y: mine.y }) });
+});
+
+document.getElementById('placeStandalone').addEventListener('change', e => {
+  putMapAt({ method: 'POST', headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ standalone: e.target.checked }) });
 });
 
 document.getElementById('placeAuto').addEventListener('click', () =>

@@ -500,7 +500,8 @@ BIG_MAP_CELLS = 40
 
 
 def write_server_setup(mod_root: str, mod_id: str, name: str,
-                       map_folder: str, needs_erika: bool = False) -> str:
+                       map_folder: str, needs_erika: bool = False,
+                       standalone: bool = False) -> str:
     """The files and lines a dedicated server needs, ready to copy.
 
     A map mod is enough for a player on their own; a server needs three more
@@ -521,9 +522,10 @@ def write_server_setup(mod_root: str, mod_id: str, name: str,
                 "    return {\n"
                 f'        {{ name = "{name}", '
                 f'file = "media/maps/{map_folder}/spawnpoints.lua" }},\n'
-                '        { name = "Muldraugh, KY", '
-                'file = "media/maps/Muldraugh, KY/spawnpoints.lua" },\n'
-                "    }\n"
+                + ("" if standalone else
+                   '        { name = "Muldraugh, KY", '
+                   'file = "media/maps/Muldraugh, KY/spawnpoints.lua" },\n')
+                + "    }\n"
                 "end\n")
     heading = f"{name} on a dedicated server"
     lines = [
@@ -548,10 +550,18 @@ def write_server_setup(mod_root: str, mod_id: str, name: str,
         "2. In your server's .ini (Zomboid/Server/<name>.ini), set:",
         "",
         f"      Mods={mod_id}",
-        f"      Map={map_folder};Muldraugh, KY",
+        (f"      Map={map_folder}" if standalone
+         else f"      Map={map_folder};Muldraugh, KY"),
         "",
+    ] + ([
+        "   This map is standalone: it is the whole world, and Muldraugh, KY",
+        "   is not loaded, so do not add it. If the game will not load the map",
+        "   without it, install the map again without Standalone and use",
+        f"   Map={map_folder};Muldraugh, KY instead.",
+    ] if standalone else [
         "   Keep Muldraugh, KY at the end: the game reads the vanilla lot",
         "   definitions from it, and this map inherits them.",
+    ]) + [
         "   If either line already has entries, add to them with a semicolon",
         "   between - do not replace what is there.",
         "   Spell both exactly as above. Most servers run Linux, where the",
@@ -783,9 +793,12 @@ def package(project_dir: str, name: str, mod_id: str,
 
     # lots=Muldraugh, KY tells the game which vanilla lot set to inherit room
     # and tile definitions from; every community map sets it.
+    from knoxbuild import placement as _placement
+    is_standalone = _placement.standalone(project_dir)
     with open(os.path.join(map_dir, "map.info"), "w", encoding="utf-8") as f:
         f.write(f"title={name}\n")
-        f.write("lots=Muldraugh, KY\n")
+        if not is_standalone:      # a standalone map inherits nothing from Knox County
+            f.write("lots=Muldraugh, KY\n")
         f.write("fixed2x=true\n")
         f.write(f"description={desc}\n")
 
@@ -831,7 +844,7 @@ def package(project_dir: str, name: str, mod_id: str,
     write_how_to_play(mod_root, name, n_cells, big_map)
     regions = write_server_setup(mod_root, mod_id, name,
                                  folder_name(name, mod_id),
-                                 needs_erika=uses_erika)
+                                 needs_erika=uses_erika, standalone=is_standalone)
     n_pois = write_spawn_selector(project_dir, mod_root, mod_id, name)
     reset_loot = write_reset_loot(mod_root)
     gun_cache = write_gun_cache(project_dir, mod_root, mod_id)

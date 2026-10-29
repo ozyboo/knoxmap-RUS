@@ -412,13 +412,14 @@ OFFICE_DESKS = ["desk", "desk_dark", "desk_long", "desk_long_pale"]
 
 
 def furnish_office(plan, idx: int, room, rng: random.Random, occupied: set,
-                   keep_clear: set) -> list[str]:
+                   keep_clear: set, keeps_open=None) -> list[str]:
     """Desks with their chairs in rows. Returns what is left for the walls."""
     L = _layout()
     desk = rng.choice(OFFICE_DESKS)
     long_desk = len(C.FURNITURE[desk]["N"]) == 3
     group = [(desk, 0, 1, "S"), ("office_chair", 1 if long_desk else 0, 0, "N")]
-    placed = L._place_group(plan, idx, room, group, max(1, room.area // 16), occupied, keep_clear)
+    placed = L._place_group(plan, idx, room, group, max(1, room.area // 16), occupied, keep_clear,
+                            keeps_open)
     cabinet = rng.choice(["filing_cabinet", "filing_cabinet_pale"])
     walls = [cabinet, cabinet, "water_cooler", "whiteboard", "plant", cabinet, "corkboard",
              "bookshelf"]
@@ -473,9 +474,10 @@ def palette(rng: random.Random, profile=None) -> dict[str, str]:
 
 
 def bed_against_wall(plan, idx: int, room, slots, occupied: set, door_tiles: set,
-                     bed: str, side_table: str | None) -> bool:
+                     bed: str, side_table: str | None, keeps_open=None) -> bool:
     """A bed with its head to a wall and a bedside table on each side, on the
-    longest stretch of inside wall that takes it."""
+    longest stretch of inside wall that takes it. A spot or a bedside table
+    that keeps_open(tiles) refuses is skipped."""
     L = _layout()
     by_side: dict[str, list] = {}
     for x, y, facing in slots:
@@ -502,6 +504,8 @@ def bed_against_wall(plan, idx: int, room, slots, occupied: set, door_tiles: set
             foot = {(cx + dx, cy + dy) for cx, cy in got} - set(got)
             if any(c in occupied or L._room_at(plan, *c) != idx for c in foot):
                 continue
+            if keeps_open and not keeps_open(got):
+                continue
             if side in ("N", "S"):
                 edge_y = y
                 flank = [(ax - 1, edge_y), (ax + w + 1, edge_y)]
@@ -519,7 +523,7 @@ def bed_against_wall(plan, idx: int, room, slots, occupied: set, door_tiles: set
                 for fx, fy in flank:
                     tc = L._cells_for(side_table, fx, fy, t_or)
                     if all(c not in occupied and c not in door_tiles and L._room_at(plan, *c) == idx
-                           for c in tc):
+                           for c in tc) and (keeps_open is None or keeps_open(tc)):
                         plan.furniture.append((side_table, fx, fy, t_or))
                         occupied.update(tc)
             return True
@@ -626,7 +630,8 @@ def _wall_sets(plan, idx: int, room, group, placed_cells: set, blocked: set) -> 
 
 
 def furnish_dining(plan, idx: int, room, rng: random.Random, occupied: set,
-                   keep_clear: set, door_tiles: set, street: str | None) -> list[str]:
+                   keep_clear: set, door_tiles: set, street: str | None,
+                   keeps_open=None) -> list[str]:
     """Fit out a dining room, café or bar. Returns what is left for the walls."""
     L = _layout()
     style = eatery_style(plan, idx, room)
@@ -671,11 +676,12 @@ def furnish_dining(plan, idx: int, room, rng: random.Random, occupied: set,
     group = [g for g in group if g[0] in C.FURNITURE]
     placed = 0
     if min(room.w, room.h) >= MIN_CENTRE_SIDE:
-        placed = L._place_group(plan, idx, room, group, max(1, room.area // 12), occupied, blocked)
+        placed = L._place_group(plan, idx, room, group, max(1, room.area // 12), occupied, blocked,
+                                keeps_open)
     if not placed:
         placed = _wall_sets(plan, idx, room, group, occupied, blocked)
     if not placed:
         # Too small even for that: one small table and its chairs.
         L._place_group(plan, idx, room, [g for g in SMALL_TABLE_SET if g[0] in C.FURNITURE],
-                       1, occupied, set(door_tiles))
+                       1, occupied, set(door_tiles), keeps_open)
     return ["plant", "painting", "plant"]

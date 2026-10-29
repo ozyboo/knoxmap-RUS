@@ -631,3 +631,26 @@ summary .count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .place-row .is-on { color: var(--accent-ink); background: var(--accent);
   border-color: var(--accent); }
 #placeNote.bad { color: var(--bad); }
+
+/* The drawing editor's toolbar (static/js/draw.js): one row of buttons
+   wherever it appears, dimmed when there is nothing for them to act on. */
+.kd-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#boardTools { display: contents; }
+.kd-bar .btn { font-size: 12px; padding: 4px 10px; width: auto; }
+.kd-bar .btn:disabled { opacity: .45; cursor: default; }
+.kd-bar .btn.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+
+/* The building editor: the picked room's outline, the size of a drag, and the
+   tile under the pointer. */
+#bdSelBox { position: absolute; pointer-events: none; box-sizing: border-box;
+            border: 2px solid #ff5f5f; background: rgba(255, 95, 95, .12); }
+#bdSelBox[hidden] { display: none; }
+#bdDrag::after { content: attr(data-size); position: absolute; right: 2px; bottom: 2px;
+                 font-size: 11px; padding: 1px 4px; border-radius: 3px;
+                 background: rgba(0, 0, 0, .65); color: #fff; }
+.builder-storeys { align-items: center; justify-content: space-between; }
+#bdHover { font-variant-numeric: tabular-nums; }
+
+.place-where { color: var(--muted); font-size: 13px; }
+#placeCanvas { touch-action: none; }
+#placeCanvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

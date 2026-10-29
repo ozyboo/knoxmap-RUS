@@ -58,15 +58,41 @@ def saved(out_dir: str) -> tuple[int, int] | None:
         return None
 
 
-def save(out_dir: str, cells) -> tuple[int, int]:
+def standalone(out_dir: str) -> bool:
+    """Whether this map is built to be played without Knox County."""
+    try:
+        with open(os.path.join(out_dir, PLACEMENT_FILE), encoding="utf-8") as f:
+            return json.load(f).get("standalone") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def save(out_dir: str, cells, standalone_flag: bool | None = None) -> tuple[int, int]:
+    """Remember the place chosen; the standalone choice is kept unless one is given."""
     x, y = clamp(cells)
+    keep = standalone(out_dir) if standalone_flag is None else bool(standalone_flag)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, PLACEMENT_FILE)
     tmp = path + ".part"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"cell_x": x, "cell_y": y}, f)
+        json.dump({"cell_x": x, "cell_y": y, "standalone": keep}, f)
     os.replace(tmp, path)
     return x, y
+
+
+def set_standalone(out_dir: str, map_name: str, on: bool) -> dict:
+    """Make the map standalone, or take it back to sharing the world.
+
+    A standalone map is the only one in its world, so it goes to the corner,
+    cell 0,0, where the world is smallest. Taking it back leaves it where it
+    stands: the player picks a new place, or has one picked for them."""
+    if on:
+        save(out_dir, (0, 0), standalone_flag=True)
+        return move(out_dir, map_name, (0, 0), remember=False)
+    where = saved(out_dir) or project_origin(out_dir, map_name) or (0, 0)
+    save(out_dir, where, standalone_flag=False)
+    return {"origin": list(where), "was": list(where), "rewrote": [],
+            "needsBuild": False, "needsCompile": False}
 
 
 def forget(out_dir: str) -> bool:
@@ -406,6 +432,7 @@ def layout(out_dir: str, map_name: str, cache_dir: str | None = None) -> dict:
     mine = {"x": where[0], "y": where[1], "w": width, "h": height}
     taken = [m for m in installed_maps()
              if not (built and m["x"] == built[0] and m["y"] == built[1])]
+    alone = standalone(out_dir)
     return {
         "vanilla": {"x": vx, "y": vy, "w": vw, "h": vh, "name": VANILLA_NAME},
         # The world as it really is, in compiled cells, for the picture.
@@ -419,10 +446,13 @@ def layout(out_dir: str, map_name: str, cache_dir: str | None = None) -> dict:
         "lotsMatch": lots_match(out_dir, (where[0], where[1])),
         "cellTiles": CELL_SIZE,
         "maxCell": MAX_CELL,
-        "clash": ([VANILLA_NAME] if width and height
-                  and overlaps(mine, {"x": vx, "y": vy, "w": vw, "h": vh}) else [])
-                 + [f"a map at cell {m['x']},{m['y']}" for m in taken
-                    if width and height and overlaps(mine, m)],
+        "standalone": alone,
+        # A standalone map is the only one in its world: nothing to clash with.
+        "clash": [] if alone else (
+            ([VANILLA_NAME] if width and height
+             and overlaps(mine, {"x": vx, "y": vy, "w": vw, "h": vh}) else [])
+            + [f"a map at cell {m['x']},{m['y']}" for m in taken
+               if width and height and overlaps(mine, m)]),
     }
 
 

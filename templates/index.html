@@ -279,10 +279,8 @@
         <label class="check"><input type="checkbox" id="drawnOnly">
           Only what I draw <span class="hint">- nothing is downloaded, so a
           place that is not on OpenStreetMap can be built</span></label>
-        <div class="sketch-actions">
-          <button type="button" id="sketchUndo" class="btn">Undo last</button>
-          <button type="button" id="sketchClear" class="btn">Clear all</button>
-        </div>
+        <div id="sketchTools" class="sketch-actions"></div>
+        <div id="sketchPicked" class="edit-selected" hidden></div>
         <div id="sketchNote" class="hint"></div>
       </details>
 
@@ -296,6 +294,7 @@
           <button type="button" id="zoneDraw" class="btn">Draw a zone</button>
           <button type="button" id="zoneSave" class="btn" disabled>Save zones</button>
         </div>
+        <div id="zoneTools" class="sketch-actions"></div>
         <input type="search" id="zoneFind" class="list-search" hidden
                autocomplete="off" placeholder="Search the zones">
         <ul id="zoneList" class="zone-list"></ul>
@@ -402,43 +401,41 @@
       <button id="buildingsBtn" class="btn">Build</button>
       <button class="btn btn-stop" data-stop hidden>Stop</button>
     </li>
-    <li class="pipe-card" data-step="compile">
+    <li class="pipe-card" data-step="place">
       <div class="pipe-body">
-        <div class="pipe-title">4. Compile</div>
-        <span id="compileNote" class="step-note">Turns the map into the game's files.
-          Takes a few minutes.</span>
-        <div class="bar"><div id="compileBar" class="bar-fill"></div></div>
-        <button id="retryCellsBtn" class="btn btn-small" hidden>Compile the cells that failed</button>
-        <details class="manual-fallback">
-          <summary>Or do it yourself in WorldEd</summary>
-          <button id="worldedBtn" class="btn btn-small" disabled>Open in WorldEd</button>
-          <span id="worldedNote" class="step-note">Then
-            <b>File → BMP To TMX → All Cells…</b> and
-            <b>File → Generate Lots 8x8 → All Cells…</b></span>
-        </details>
-      </div>
-      <button id="compileBtn" class="btn" disabled>Compile</button>
-      <button class="btn btn-stop" data-stop hidden>Stop</button>
-    </li>
-    <li class="pipe-card" data-step="install">
-      <div class="pipe-body">
-        <div class="pipe-title">5. Install</div>
-        <div class="install-row">
-          <label>Name in game <input type="text" id="mapTitle"/></label>
-          <label>Mod id <input type="text" id="modId"/></label>
-        </div>
+        <div class="pipe-title">4. Place on the world map <span class="step-note">optional</span></div>
         <!-- Where the map stands in the world every installed map shares.
              Picked here rather than packed in automatically
              (knoxbuild/placement.py). -->
-        <details id="placePanel">
-          <summary>Where it goes on the world map
-            <span class="count" id="placeWhere"></span></summary>
+        <div id="placePanel">
+          <div class="place-where">Where it goes
+            <span class="count" id="placeWhere"></span></div>
           <p class="hint">Knox County sits in the corner of the world, and
             every map you install shares that grid. Click to put yours
             somewhere else - north of the vanilla map, far out on its own, or
             right beside another of your own towns.</p>
-          <canvas id="placeCanvas" width="720" height="470"
+          <label class="place-standalone">
+            <input type="checkbox" id="placeStandalone">
+            Standalone: play it without Knox County
+          </label>
+          <p class="hint" id="placeStandaloneHint">Puts the map in the corner of the
+            world and installs it without the Muldraugh, KY link, so it is the whole
+            world. Experimental: try it in the game, and untick this and install
+            again if it will not load. Untick it to put the map back on the shared
+            world, and over Knox County if you like: a map put on top of Knox County
+            replaces the vanilla cells under it.</p>
+          <canvas id="placeCanvas" width="720" height="470" tabindex="0"
                   aria-label="The world, with Knox County and your map on it"></canvas>
+          <div class="place-row">
+            <button type="button" id="placeZoomOut" class="btn btn-small"
+                    title="Zoom out (minus key)">−</button>
+            <button type="button" id="placeZoomIn" class="btn btn-small"
+                    title="Zoom in (plus key, or the mouse wheel)">+</button>
+            <button type="button" id="placeZoomFit" class="btn btn-small"
+                    title="Show the whole world (0)">Whole world</button>
+            <span class="hint">Wheel or + and − to zoom, middle mouse button to
+              drag the view.</span>
+          </div>
           <div class="place-row">
             <label>Cell <input type="number" id="placeX" min="0" max="400">
               , <input type="number" id="placeY" min="0" max="400"></label>
@@ -465,7 +462,34 @@
               Make the road map</button>
           </div>
           <div id="placeNote" class="hint"></div>
+        </div>
+      </div>
+    </li>
+    <li class="pipe-card" data-step="compile">
+      <div class="pipe-body">
+        <div class="pipe-title">5. Compile</div>
+        <span id="compileNote" class="step-note">Turns the map into the game's files.
+          Takes a few minutes.</span>
+        <div class="bar"><div id="compileBar" class="bar-fill"></div></div>
+        <button id="retryCellsBtn" class="btn btn-small" hidden>Compile the cells that failed</button>
+        <details class="manual-fallback">
+          <summary>Or do it yourself in WorldEd</summary>
+          <button id="worldedBtn" class="btn btn-small" disabled>Open in WorldEd</button>
+          <span id="worldedNote" class="step-note">Then
+            <b>File → BMP To TMX → All Cells…</b> and
+            <b>File → Generate Lots 8x8 → All Cells…</b></span>
         </details>
+      </div>
+      <button id="compileBtn" class="btn" disabled>Compile</button>
+      <button class="btn btn-stop" data-stop hidden>Stop</button>
+    </li>
+    <li class="pipe-card" data-step="install">
+      <div class="pipe-body">
+        <div class="pipe-title">6. Install</div>
+        <div class="install-row">
+          <label>Name in game <input type="text" id="mapTitle"/></label>
+          <label>Mod id <input type="text" id="modId"/></label>
+        </div>
         <span id="installNote" class="step-note">Copies the map into your Zomboid mods folder.</span>
       </div>
       <button id="installBtn" class="btn" disabled>Install</button>
@@ -503,10 +527,7 @@
       <input type="range" id="boardTraceOpacity" min="0.1" max="1" step="0.05"
              value="0.55"></label>
     <button type="button" id="boardTraceOff" class="btn" hidden>Remove image</button>
-    <button type="button" id="boardEdit" class="btn">Move and reshape</button>
-    <button type="button" id="boardDupe" class="btn" disabled>Duplicate</button>
-    <button type="button" id="boardUndo" class="btn">Undo</button>
-    <button type="button" id="boardClear" class="btn">Clear</button>
+    <span id="boardTools"></span>
     <button type="button" id="boardSave" class="btn">Save</button>
     <button type="button" id="boardBuild" class="btn btn-primary">Build this map</button>
     <button type="button" id="boardClose" class="btn">Close</button>
@@ -514,8 +535,9 @@
   <div class="board-body">
     <aside class="board-tools">
       <p class="hint">Click a tool, then click on the sheet to draw.
-        Double-click to finish a line or a shape. Click a thing to pick it;
-        Delete removes it, Escape stops drawing.</p>
+        Double-click to finish a line or a shape. Click a thing to pick it:
+        Delete removes it, the arrow keys nudge it, Escape lets go.
+        Ctrl+Z undoes, Ctrl+Shift+Z redoes.</p>
       <!-- A sheet that joins a map already built: the map next door is shown
            beside it and the streets that reach their shared border are marked
            on this sheet's edge, so a road drawn to one of them meets it. -->
@@ -570,7 +592,10 @@
       <select id="bdStyle"></select></label>
     <span class="board-spacer"></span>
     <button type="button" id="bdFill" class="btn">Lay it out for me</button>
-    <button type="button" id="bdUndo" class="btn" disabled>Undo</button>
+    <button type="button" id="bdCopyUp" class="btn"
+            title="Copy this floor onto the one above it">Copy floor up</button>
+    <button type="button" id="bdUndo" class="btn" disabled title="Ctrl+Z">Undo</button>
+    <button type="button" id="bdRedo" class="btn" disabled title="Ctrl+Shift+Z">Redo</button>
     <button type="button" id="bdClear" class="btn">Clear</button>
     <button type="button" id="bdSave" class="btn btn-primary">Save as preset</button>
     <button type="button" id="bdClose" class="btn">Close</button>
@@ -580,15 +605,19 @@
       <p class="hint">Pick a room, then drag across the plan to draw it.
         Drawing over a room takes that much of it away; the eraser cuts the
         shape of the building. To change a room you have already drawn, take
-        the adjust tool and drag its edge.</p>
+        the adjust tool and drag its edge; a room you have taken hold of can then
+        be moved with the arrow keys, copied with Ctrl+D or removed with
+        Delete. Ctrl+Z undoes, Ctrl+Shift+Z redoes.</p>
       <input type="search" id="bdFind" class="list-search" hidden
              autocomplete="off" placeholder="Search the rooms">
       <div id="bdRooms" class="sketch-palette"></div>
     </aside>
     <div class="builder-sheet">
-      <div class="builder-storeys" id="bdStoreyTabs"></div>
+      <div class="builder-storeys"><span id="bdStoreyTabs" class="kd-bar"></span>
+        <span class="hint" id="bdHover"></span></div>
       <div class="builder-plan" id="bdPlan">
         <img id="bdImage" alt="The plan of this building">
+        <div id="bdSelBox" hidden></div>
         <div id="bdDrag" hidden></div>
         <p class="hint builder-empty" id="bdEmpty">Nothing drawn yet. Pick a
           room and drag a rectangle, or let the generator lay one out for you
@@ -610,6 +639,7 @@
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/vendor/leaflet-draw/leaflet.draw.js"></script>
 <script src="/static/js/fx.js"></script>
+<script src="/static/js/draw.js"></script>
 <script src="/static/js/app.js"></script>
 <script src="/static/js/i18n.js"></script>
 </body>

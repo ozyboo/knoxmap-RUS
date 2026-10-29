@@ -141,8 +141,8 @@ class Settings:
     # Scales how many ParkingStall zones are found. Vehicles only ever spawn
     # inside one, so this is the dial for how many cars are in the streets.
     parking_density: float = 1.0
-    # How each building outline is fitted to the tile grid.
-    building_alignment: str = "smart"
+    # How each building outline is fitted to the tile grid: the dominant wall direction, keeping the shape.
+    building_alignment: str = "rectilinear"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -175,7 +175,10 @@ class Settings:
                 continue          # NaN compares false with everything; keep the default
             lo, hi = LIMITS[name]
             kept[name] = min(max(value, lo), hi)
-        if "building_alignment" not in data:
+        # Only a settings file from before building_alignment existed names these; anything
+        # else, a preset or a bare request, takes the default as it stands.
+        if "building_alignment" not in data and ("square_buildings" in data
+                                                  or "straight_roads" in data):
             old_square = data.get("square_buildings",
                                   base.get("square_buildings", cls().square_buildings))
             old_straight = data.get("straight_roads", base.get("straight_roads", 0))
@@ -213,10 +216,12 @@ LIMITS = {
     "apartment_footprint": (16, 4000),
     "apartment_chance": (0.0, 1.0),
     # Build 42 has 32 levels above ground (WorldEd's MAX_WORLD_LEVELS is 64,
-    # -32 to 31), and the vanilla map's tallest tower reaches level 29. Every
-    # storey is a full floor of rooms and furniture, so tall towns cost build
-    # and compile time - the presets stay low and this is the ceiling.
-    "max_levels": (1, 30),
+    # -32 to 31), and the vanilla map's tallest tower reaches level 29. tbx.py
+    # always puts a roof floor on top of the last storey, and the roof takes
+    # one of the 32 levels, so 31 storeys is the most that fits. Every storey
+    # is a full floor of rooms and furniture, so tall towns cost build and
+    # compile time - the presets stay low.
+    "max_levels": (1, 31),
     "vanilla_tiles": (0, 1),
     "room_size": (16, 400),
     "room_solver": (0, 1),

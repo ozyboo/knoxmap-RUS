@@ -133,6 +133,47 @@ class ChoosingAPlace(AMapOnDisk):
         self.assertIsNone(P.saved(self.dir))
 
 
+class Standalone(AMapOnDisk):
+    def test_a_map_is_not_standalone_until_it_is_made_so(self):
+        self.assertFalse(P.standalone(self.dir))
+        self.assertFalse(P.layout(self.dir, "town")["standalone"])
+
+    def test_standalone_goes_to_the_corner_and_is_remembered(self):
+        P.set_standalone(self.dir, "town", True)
+        self.assertTrue(P.standalone(self.dir))
+        self.assertEqual(P.saved(self.dir), (0, 0))
+        self.assertEqual(P.project_origin(self.dir, "town"), (0, 0))
+        self.assertTrue(P.layout(self.dir, "town")["standalone"])
+
+    def test_moving_a_standalone_map_keeps_it_standalone(self):
+        P.set_standalone(self.dir, "town", True)
+        P.save(self.dir, (3, 4))
+        self.assertTrue(P.standalone(self.dir))
+
+    def test_taking_standalone_off_leaves_the_map_where_it_is(self):
+        P.set_standalone(self.dir, "town", True)
+        P.set_standalone(self.dir, "town", False)
+        self.assertFalse(P.standalone(self.dir))
+        self.assertEqual(P.saved(self.dir), (0, 0))
+
+    def test_forgetting_the_place_forgets_standalone_too(self):
+        P.set_standalone(self.dir, "town", True)
+        P.forget(self.dir)
+        self.assertFalse(P.standalone(self.dir))
+
+    def test_the_server_setup_drops_knox_county_for_a_standalone_map(self):
+        from tools import make_map_mod as m
+        for flag in (False, True):
+            with self.subTest(standalone=flag), tempfile.TemporaryDirectory() as root:
+                m.write_server_setup(root, "Town", "Town", "Town", standalone=flag)
+                text = open(os.path.join(root, "SERVER SETUP.txt"), encoding="utf-8").read()
+                regions = open(os.path.join(root, "server", "Town_spawnregions.lua"),
+                               encoding="utf-8").read()
+                self.assertEqual("\n      Map=Town;Muldraugh, KY\n" in text, not flag)
+                self.assertEqual("\n      Map=Town\n" in text, flag)
+                self.assertEqual("Muldraugh" in regions, not flag)
+
+
 class WhatTheWindowShows(AMapOnDisk):
     def test_knox_county_and_this_map_are_both_on_it(self):
         world = P.layout(self.dir, "town")
@@ -145,6 +186,10 @@ class WhatTheWindowShows(AMapOnDisk):
         P.save(self.dir, (10, 10))
         world = P.layout(self.dir, "town")
         self.assertIn(P.VANILLA_NAME, world["clash"])
+
+    def test_a_standalone_map_has_nothing_to_clash_with(self):
+        P.save(self.dir, (10, 10), standalone_flag=True)
+        self.assertEqual(P.layout(self.dir, "town")["clash"], [])
 
     def test_it_says_whether_the_map_is_compiled_where_it_now_sits(self):
         self.assertFalse(P.layout(self.dir, "town")["compiled"])

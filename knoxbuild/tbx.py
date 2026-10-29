@@ -68,6 +68,10 @@ NARROW_PEAK_MIN = 2
 # roof too, whose height stops at three levels.
 MANY_WING_RECTS = 3
 MANY_WING_PEAK30_MAX = 7
+# On a diagonal edge the same footprint breaks into many tiny rectangles, and a gable on each
+# reads as a row of teeth along the eave. In such a footprint a piece under this many tiles
+# stays flat, level with the wall top, so the eave is one line.
+MANY_WING_MIN_PITCHED_AREA = 8
 
 
 def _roof_pieces(rects, peaked: bool, roof30: bool = True):
@@ -88,7 +92,8 @@ def _roof_pieces(rects, peaked: bool, roof30: bool = True):
     single = len(rects) == 1
     for rx, ry, rw, rh, caps in rects:
         across = min(rw, rh)
-        if not peaked or across < NARROW_PEAK_MIN:
+        tooth = len(rects) >= MANY_WING_RECTS and rw * rh < MANY_WING_MIN_PITCHED_AREA
+        if not peaked or across < NARROW_PEAK_MIN or tooth:
             out.append(("FlatTop", "Three", dict(_NO_CAPS), (rx, ry, rw, rh)))
             continue
         along_x = rw >= rh

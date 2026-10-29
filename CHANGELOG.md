@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.6.5
+
+- Furniture no longer blocks doors or routes: pieces are placed around a
+  reserved walkway, decoration is dropped before essentials, and pieces on
+  window squares are moved instead of deleted; about 2.4% of pieces are
+  removed, down from 7.2%.
+- **Tower interiors** (`knoxbuild/tower.py`, `knoxbuild/layout.py`). Towers
+  (civic buildings of 12 or more storeys on a footprint of 14x14 or bigger)
+  get a central core with a bank of lifts, open office floors around it, a
+  lobby on the ground floor and a plant floor near the top.
+- **Taller towers**. The height limit is raised to 31 storeys: Build 42 has
+  32 levels above ground and the roof takes the last one.
+- **No overlap warning on standalone maps**. Standalone maps no longer warn
+  about overlaps.
+- **Room sizes follow room type** (`knoxbuild/sizing.py`, `knoxbuild/layout.py`). Houses and
+  flats pick their rooms first and cut the floor to each room's size, so a bathroom is no
+  longer the size of a bedroom or a living room. Floors it cannot cut this way (small or
+  irregular footprints) keep the old layout.
+- **Every building is rebuilt once**. The building cache is keyed on the layout sources, so
+  the first build after updating lays out every building again.
+- **No more cabinets over nothing**. A wall cabinet or microwave above a counter that was
+  removed to clear a doorway is removed with it. This also affects shops, offices and other
+  non-home buildings, and buildings laid out by the room solver.
+
 ## 1.7.6.4
 
 - **More map data servers, a server test, and a server of your own**

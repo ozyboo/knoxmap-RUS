@@ -209,12 +209,22 @@ def generate():
     # exactly as they see a mapped one (generator/overture.py).
     gaps = {"added": 0}
     if settings.fill_gaps:
-        from generator import overture
+        from generator import msbuildings, overture
         _set_progress(map_name, stage="overture", done=0, total=1)
+        # Microsoft's files first: plain downloads, nothing to install. Overture
+        # (DuckDB) only if they cannot be reached.
         try:
-            features, gaps = overture.add_missing(
-                features, fetch_box, str(map_dir), map_name,
-                should_stop=_stopper(map_name))
+            try:
+                features, gaps = msbuildings.add_missing(
+                    features, fetch_box, str(map_dir), map_name,
+                    should_stop=_stopper(map_name))
+            except knoxstop.Stopped:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.warning("microsoft buildings %s: %s", map_name, exc)
+                features, gaps = overture.add_missing(
+                    features, fetch_box, str(map_dir), map_name,
+                    should_stop=_stopper(map_name))
         except knoxstop.Stopped:
             return _stopped(map_name, "generate")
         except Exception as exc:  # noqa: BLE001 - OSM alone still makes a map

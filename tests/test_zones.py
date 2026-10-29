@@ -47,6 +47,9 @@ class Cleaning(unittest.TestCase):
         self.assertEqual(kept[0]["settings"]["max_levels"], float(hi))
         self.assertEqual(kept[1]["settings"]["max_levels"], float(lo))
 
+    def test_max_levels_ceiling_is_build_42(self):
+        self.assertEqual(LIMITS["max_levels"], (1, 31))
+
     def test_a_shape_that_is_not_a_shape_is_dropped(self):
         self.assertEqual(zones.clean([{"ring": [[0, 0], [1, 1]]}]), [])
         self.assertEqual(zones.clean([{"ring": "nonsense"}]), [])
