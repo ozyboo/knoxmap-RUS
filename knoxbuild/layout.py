@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from . import catalog as C
 from .uses import FRONT_ROOMS
 from .settings import Settings
+from .sizing import SIZES, min_area, programme_for_flat, split_by_targets
 
 MIN_ROOM = 3          # smallest room dimension, in tiles
 MIN_SPLIT = MIN_ROOM * 2 + 1
@@ -865,6 +866,41 @@ def _corridor_axis(plan: Plan) -> str | None:
     return "y" if (y1 - y0) >= (x1 - x0) else "x"
 
 
+def _flat_by_kind(box: tuple[int, int, int, int], rng: random.Random,
+                  open_plan: bool, mask: list[list[bool]] | None,
+                  edge: str) -> list[Room] | None:
+    """A flat's rooms cut to its programme's sizes, the living room on `edge`.
+
+    Kinds are set and fixed here, so a bathroom is cut bathroom-sized rather
+    than named after whichever piece came out smallest. A programme no cut
+    can carve (four rooms in a strip five tiles deep) steps down to the next
+    smaller one. None when none fits: the caller falls back.
+    """
+    x0, y0, x1, y1 = box
+    area = (sum(mask[y][x] for y in range(y0, y1 + 1) for x in range(x0, x1 + 1))
+            if mask is not None else (x1 - x0 + 1) * (y1 - y0 + 1))
+    while kinds := programme_for_flat(area, rng, open_plan):
+        # The front door opens into the living room, so it goes first.
+        if kinds[0] == "hall":
+            kinds = kinds[1:2] + kinds[:1] + kinds[2:]
+        rooms = split_by_targets(box, kinds, rng, mask, edge)
+        # Cut to the footprint, only one flat in seven on an irregular or
+        # turned one found a cut at all. Failing that, the whole box is cut
+        # and _paint clips it - kept only where every room keeps its kind's
+        # least floor inside the walls, or the bathroom is the first to go.
+        if not rooms and mask is not None:
+            rooms = split_by_targets(box, kinds, rng, None, edge)
+            if rooms and any(
+                    sum(mask[y][x] for y in range(r.y0, r.y1 + 1)
+                        for x in range(r.x0, r.x1 + 1)) < SIZES[r.kind].lo
+                    for r in rooms):
+                rooms = None
+        if rooms:
+            return rooms
+        area = min_area(kinds) - 1
+    return None
+
+
 def _apartment_rooms(plan: Plan, rng: random.Random, target: int,
                      frontage: tuple[int, int] = FLAT_FRONTAGE) -> None:
     """Lay a floor out as flats either side of a corridor.
@@ -898,7 +934,9 @@ def _apartment_rooms(plan: Plan, rng: random.Random, target: int,
     else:
         sides = [(0, cy0 - 1), (cy1 + 1, plan.height - 1)]
         length = plan.width
-    for a0, a1 in sides:
+    # The side of each flat's box that faces the corridor.
+    edges = ("E", "W") if axis == "y" else ("S", "N")
+    for (a0, a1), edge in zip(sides, edges):
         if a1 - a0 + 1 < MIN_ROOM:
             continue
         # Each side sliced independently, so the flats do not line up across
@@ -930,14 +968,21 @@ def _apartment_rooms(plan: Plan, rng: random.Random, target: int,
                 rooms_wanted = FLAT_ROOMS_OPEN if open_plan else FLAT_ROOMS
                 want = (max(target, area // rooms_wanted)
                         if frontage == FLAT_FRONTAGE else target)
-                _split(*box, rng, MAX_DEPTH, flat, target_area=want,
-                       mask=plan.mask)
+                # A flat is cut by what it holds, sized by kind; a hotel, and
+                # a flat no programme fits, is cut as it always was.
+                by_kind = (_flat_by_kind(box, rng, open_plan, plan.mask, edge)
+                           if frontage == FLAT_FRONTAGE else None)
+                if by_kind:
+                    flat = by_kind
+                else:
+                    _split(*box, rng, MAX_DEPTH, flat, target_area=want,
+                           mask=plan.mask)
                 # A flat that came out as one or two rooms was all living
                 # room: in a small block every flat on every floor had nothing
                 # else, not a bed or a bathroom in the building. Cut it into a
                 # home's rooms when it is big enough for them.
                 if (frontage == FLAT_FRONTAGE and not open_plan
-                        and len(flat) < 3
+                        and not by_kind and len(flat) < 3
                         and area >= FLAT_MIN_SPLIT_AREA):
                     flat = []
                     _split(*box, rng, MAX_DEPTH, flat,
@@ -1010,8 +1055,12 @@ def _stagger_flats(plan: Plan, rng: random.Random) -> None:
         if len(members) < 3 or rng.random() >= FLAT_STAGGER_SHARE:
             continue
         # The room to give away: one on the flat's edge, touching another flat.
+        # A room cut to its kind moves only if it is a bedroom: giving away a
+        # living room, kitchen or bathroom would leave its flat without one.
         options = [(i, plan.rooms[n - 1].unit)
                    for i in members
+                   if not plan.rooms[i - 1].fixed
+                   or plan.rooms[i - 1].kind in ("bedroom", "kidsbedroom")
                    for n in adj.get(i, ())
                    if plan.rooms[n - 1].unit
                    and plan.rooms[n - 1].unit != unit]
@@ -1078,6 +1127,28 @@ def _assign_flat_kinds(plan: Plan, hotel: bool = False,
     for u, members in units.items():
         entry = [i for i in members if any(n in corridor for n in adj[i])]
         by_size = sorted(members, key=lambda i: -plan.rooms[i - 1].area)
+        # A flat cut by kind (_flat_by_kind) keeps its kinds while its living
+        # room still opens off the corridor. One that took in a neighbour's
+        # rooms keeps a single living room, kitchen and hall - the one by the
+        # door first - and the doubles, like any piece the cut never named,
+        # are handed out as extras. A living room cut off from the corridor
+        # throws the flat back to being named by size.
+        door = [i for i in entry if plan.rooms[i - 1].fixed
+                and plan.rooms[i - 1].kind in ("livingroom", "openplan")]
+        if door and not hotel:
+            keep = max(door, key=lambda i: plan.rooms[i - 1].area)
+            taken: set[str] = set()
+            extra = 0
+            for i in [keep] + [i for i in by_size if i != keep]:
+                room = plan.rooms[i - 1]
+                slot = "livingroom" if room.kind == "openplan" else room.kind
+                if room.fixed and (slot not in ("livingroom", "kitchen", "hall")
+                                   or slot not in taken):
+                    taken.add(slot)
+                    continue
+                room.kind = FLAT_EXTRA[extra % len(FLAT_EXTRA)]
+                extra += 1
+            continue
         first = max(entry, key=lambda i: plan.rooms[i - 1].area) \
             if entry else by_size[0]
         # In a flat big enough for a hall, the hall is the first of the plan,

@@ -147,5 +147,90 @@ class Split(unittest.TestCase):
         self.assertIsNone(S.split_by_targets((0, 0, 11, 9), FLAT, random.Random(0), mask))
 
 
+LIVING = ("livingroom", "openplan")
+BEDS = ("bedroom", "kidsbedroom")
+
+
+def _flat_floors(n=100):
+    """Every storey of n flat blocks of varied footprint."""
+    from knoxbuild import layout as L
+    rng = random.Random(11)
+    for i in range(n):
+        w, h = rng.randint(9, 22), rng.randint(8, 18)
+        b = L.build_building(w, h, levels=rng.randint(2, 4), kind="apartment", seed=i)
+        yield from b.storeys
+
+
+def _touches_corridor(plan, idx):
+    for y in range(plan.height):
+        for x in range(plan.width):
+            if plan.grid[y][x] != idx:
+                continue
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if (0 <= nx < plan.width and 0 <= ny < plan.height
+                        and plan.grid[ny][nx]
+                        and plan.rooms[plan.grid[ny][nx] - 1].unit == 0):
+                    return True
+    return False
+
+
+class Flats(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.floors = list(_flat_floors())
+
+    def test_medians(self):
+        import statistics as st
+        area = {"bath": [], "bed": [], "living": []}
+        for plan in self.floors:
+            for r in plan.rooms:
+                key = ("bath" if r.kind == "bathroom" else "bed" if r.kind == "bedroom"
+                       else "living" if r.kind in LIVING else None)
+                if key and not r.is_core:
+                    area[key].append(r.area)
+        m = {k: st.median(v) for k, v in area.items()}
+        self.assertLess(m["bath"], m["bed"], m)
+        self.assertLess(m["bed"], m["living"], m)
+
+    def test_bathrooms_vs_bedrooms(self):
+        baths = beds = flats = 0
+        for plan in self.floors:
+            baths += sum(r.kind == "bathroom" for r in plan.rooms)
+            beds += sum(r.kind in BEDS for r in plan.rooms)
+            flats += len({r.unit for r in plan.rooms if r.unit})
+        self.assertLessEqual(baths, beds + flats)
+
+    def test_living_at_corridor(self):
+        bad = []
+        for n, plan in enumerate(self.floors):
+            if not plan.corridor:
+                continue
+            units = {r.unit for r in plan.rooms if r.unit}
+            for u in units:
+                if not any(r.unit == u and r.kind in LIVING and _touches_corridor(plan, i)
+                           for i, r in enumerate(plan.rooms, 1)):
+                    bad.append((n, u))
+        self.assertEqual(bad, [])
+
+    def test_small_flat_falls_back(self):
+        from knoxbuild import layout as L
+        self.assertIsNone(L._flat_by_kind((0, 0, 4, 3), random.Random(0), False, None, "N"))
+        L._flat_by_kind((0, 0, 5, 4), random.Random(0), False, None, "N")
+        for seed in range(10):
+            b = L.build_building(6, 5, levels=2, kind="apartment", seed=seed)
+            self.assertTrue(all(s.rooms for s in b.storeys))
+
+    def test_hotel_unchanged(self):
+        import hashlib
+        from knoxbuild import layout as L
+        out = []
+        for seed, (w, h) in enumerate([(24, 16), (32, 24), (18, 30)]):
+            b = L.build_building(w, h, levels=3, kind="apartment", hotel=True, seed=seed)
+            out.append(tuple((r.x0, r.y0, r.x1, r.y1, r.kind, r.unit)
+                             for s in b.storeys for r in s.rooms))
+        self.assertEqual(hashlib.sha256(repr(out).encode()).hexdigest(),
+                         "645f44026bd40753b1a9617d47707c825d032fcad4d5dcd8e5c06d35c518e3c9")
+
+
 if __name__ == "__main__":
     unittest.main()
