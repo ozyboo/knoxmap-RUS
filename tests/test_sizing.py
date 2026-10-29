@@ -198,6 +198,31 @@ def _touches_corridor(plan, idx):
     return False
 
 
+_MASKED: list = []
+
+
+def _masked_flat_floors():
+    """(block, storey, plan) of 140 flat blocks on irregular and turned
+    footprints, as tools/audit_layouts.py builds them; built once."""
+    if not _MASKED:
+        from knoxbuild import layout as L
+        irregular_mask, rotated_mask = _audit_masks()
+        rng = random.Random(4242)
+        for i in range(140):
+            w, h = rng.randint(9, 40), rng.randint(9, 40)
+            if i % 2:
+                mask = irregular_mask(w, h, rng)
+            else:
+                fp = rotated_mask(rng)
+                if fp is None:
+                    continue
+                w, h, mask = fp.width, fp.height, fp.mask_list()
+            b = L.build_building(w, h, levels=rng.choice((2, 3, 4, 5)), seed=i,
+                                 kind="apartment", mask=mask)
+            _MASKED.extend((i, n, plan) for n, plan in enumerate(b.storeys))
+    return _MASKED
+
+
 class Flats(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -245,32 +270,30 @@ class Flats(unittest.TestCase):
             self.assertTrue(all(s.rooms for s in b.storeys))
 
     def test_masked_flats_keep_bathroom(self):
-        # Irregular and turned footprints, as tools/audit_layouts.py builds them.
-        import os
-        import sys
-        from knoxbuild import layout as L
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "tools"))
-        from audit_layouts import irregular_mask, rotated_mask
-        rng, bad = random.Random(4242), []
-        for i in range(140):
-            w, h = rng.randint(9, 40), rng.randint(9, 40)
-            if i % 2:
-                mask = irregular_mask(w, h, rng)
-            else:
-                fp = rotated_mask(rng)
-                if fp is None:
-                    continue
-                w, h, mask = fp.width, fp.height, fp.mask_list()
-            b = L.build_building(w, h, levels=rng.choice((2, 3, 4, 5)), seed=i,
-                                 kind="apartment", mask=mask)
-            for n, plan in enumerate(b.storeys):
-                for u in {r.unit for r in plan.rooms if r.unit}:
-                    rooms = [r for r in plan.rooms if r.unit == u]
-                    if (len(rooms) >= 2 and any(r.fixed for r in rooms)
-                            and not any(r.kind == "bathroom" for r in rooms)):
-                        bad.append((i, n, u))
+        bad = []
+        for i, n, plan in _masked_flat_floors():
+            for u in {r.unit for r in plan.rooms if r.unit}:
+                rooms = [r for r in plan.rooms if r.unit == u]
+                if (len(rooms) >= 2 and any(r.fixed for r in rooms)
+                        and not any(r.kind == "bathroom" for r in rooms)):
+                    bad.append((i, n, u))
         self.assertEqual(bad, [])
+
+    def test_masked_flats_living_at_corridor(self):
+        # A flat cut by kind on a clipped footprint (mask plus first_edge)
+        # still mostly has its living room by the front door.
+        flats = at = 0
+        for _, _, plan in _masked_flat_floors():
+            if not plan.corridor:
+                continue
+            for u in {r.unit for r in plan.rooms if r.unit}:
+                if not any(r.unit == u and r.fixed for r in plan.rooms):
+                    continue
+                flats += 1
+                at += any(r.unit == u and r.kind in LIVING and _touches_corridor(plan, i)
+                          for i, r in enumerate(plan.rooms, 1))
+        self.assertGreater(flats, 100)
+        self.assertGreaterEqual(at, 0.6 * flats, (at, flats))
 
     def test_hotel_unchanged(self):
         import hashlib
@@ -349,6 +372,15 @@ class Houses(unittest.TestCase):
                 kinds = {r.kind for r in s.rooms}
                 if kinds & set(BEDS):
                     self.assertIn("bathroom", kinds, (seed, w, h, lvl, kinds))
+
+
+def _audit_masks():
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "tools"))
+    from audit_layouts import irregular_mask, rotated_mask
+    return irregular_mask, rotated_mask
 
 if __name__ == "__main__":
     unittest.main()
