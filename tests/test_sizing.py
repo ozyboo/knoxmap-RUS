@@ -90,6 +90,29 @@ class Programmes(unittest.TestCase):
 FLAT = ["livingroom", "kitchen", "bedroom", "bathroom"]
 
 
+class Areas(unittest.TestCase):
+    def test_spare_goes_to_big_rooms(self):
+        for area in (61, 90, 150, 400):
+            a = dict(zip(FLAT, S.room_areas(FLAT, area)))
+            self.assertAlmostEqual(sum(a.values()), area)
+            self.assertEqual(a["bathroom"], S.SIZES["bathroom"].target)
+            self.assertGreaterEqual(a["livingroom"], S.SIZES["livingroom"].target)
+
+    def test_big_rooms_stop_at_hi_first(self):
+        a = dict(zip(FLAT, S.room_areas(FLAT, 70)))
+        self.assertLessEqual(a["kitchen"], S.SIZES["kitchen"].hi)
+        self.assertLessEqual(a["livingroom"], S.SIZES["livingroom"].hi)
+        self.assertEqual(S.capacity(FLAT), sum(S.SIZES[k].hi for k in FLAT[:3]) + 9)
+
+    def test_short_floor_shrinks_big_rooms_first(self):
+        # Every room at its lo, none cut under 3x3 (the kitchen's lo is 8).
+        area = S.SIZES["livingroom"].lo + 9 + S.SIZES["bedroom"].lo + 9
+        a = dict(zip(FLAT, S.room_areas(FLAT, area)))
+        self.assertAlmostEqual(sum(a.values()), area)
+        self.assertEqual(a["bathroom"], S.SIZES["bathroom"].target)
+        self.assertAlmostEqual(a["bedroom"], S.SIZES["bedroom"].lo)
+
+
 def _tiles(r):
     return {(x, y) for x in range(r.x0, r.x1 + 1) for y in range(r.y0, r.y1 + 1)}
 
@@ -294,6 +317,10 @@ class Houses(unittest.TestCase):
         self.assertLess(m["storage"], m["bedroom"], m)
         self.assertLess(m["bathroom"], m["bedroom"], m)
         self.assertLess(m["bedroom"], m["livingroom"], m)
+        # A bathroom is not sized like a living room.
+        self.assertLessEqual(m["bathroom"], 0.4 * m["livingroom"], m)
+        self.assertLessEqual(m["bathroom"], 0.45 * m["bedroom"], m)
+        self.assertLessEqual(m["bathroom"], 12, m)
 
     def test_every_house_has_the_basics(self):
         for n, b in enumerate(self.houses):

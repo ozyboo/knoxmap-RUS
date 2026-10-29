@@ -56,6 +56,65 @@ def min_area(programme: list[str]) -> int:
     return sum(SIZES[k].lo for k in programme)
 
 
+# Rooms that take up a floor's spare tiles. The rest - bathroom, hall,
+# laundry, storage, closet - stay at their target however big the floor.
+GROWS = {"livingroom", "openplan", "dining", "kitchen", "bedroom",
+         "kidsbedroom", "office"}
+_FLOOR = 9          # MIN_ROOM squared: no room is cut smaller
+
+
+def capacity(programme: list[str]) -> int:
+    """Tiles a programme fills with its rooms that grow at their hi and the
+    rest at target: past this, a floor wants another room, not bigger ones."""
+    return sum(SIZES[k].hi if k in GROWS else max(SIZES[k].target, _FLOOR)
+               for k in programme)
+
+
+def room_areas(kinds: list[str], area: float) -> list[float]:
+    """Each room's share of `area` tiles, by water-filling from the targets.
+
+    Spare tiles go to the rooms that grow, in proportion to their target and
+    each only up to its hi; past every hi they grow on rather than a bathroom
+    growing at all. Short of tiles, the big rooms give way first, down to
+    their lo, then the small ones; past every lo all shrink alike.
+    """
+    t = [max(SIZES[k].target, _FLOOR) for k in kinds]
+    lo = [min(max(SIZES[k].lo, _FLOOR), v) for k, v in zip(kinds, t)]
+    hi = [max(SIZES[k].hi, v) for k, v in zip(kinds, t)]
+    big = [i for i, k in enumerate(kinds) if k in GROWS] or list(range(len(kinds)))
+    out = list(t)
+    gap = area - sum(t)
+    if gap > 0:
+        free = list(big)
+        while gap > 1e-9 and free:
+            step = gap / sum(t[i] for i in free)
+            full = [i for i in free if out[i] + t[i] * step >= hi[i]]
+            if not full:
+                for i in free:
+                    out[i] += t[i] * step
+                return out
+            for i in full:
+                gap -= hi[i] - out[i]
+                out[i] = hi[i]
+                free.remove(i)
+        if gap > 1e-9:
+            for i in big:
+                out[i] += gap * t[i] / sum(t[j] for j in big)
+        return out
+    small = [i for i in range(len(kinds)) if i not in big]
+    for group in (big, small):
+        slack = sum(out[i] - lo[i] for i in group)
+        if gap >= 0 or slack <= 0:
+            continue
+        take = min(-gap, slack)
+        for i in group:
+            out[i] -= take * (out[i] - lo[i]) / slack
+        gap += take
+    if gap < 0:
+        out = [v * area / sum(out) for v in out]
+    return out
+
+
 def programme_for_flat(area: int, rng: random.Random,
                        open_plan: bool = False) -> list[str] | None:
     """Studio, 1-, 2- or 3-bed flat by area; None when below a studio's lo sum.
@@ -103,24 +162,28 @@ def programme_for_house_floor(area: int, level: int, levels: int,
 
 def split_by_targets(box: tuple[int, int, int, int], kinds: list[str],
                      rng: random.Random, mask: list[list[bool]] | None = None,
-                     first_edge: str | None = None) -> list | None:
+                     first_edge: str | None = None,
+                     area: float | None = None) -> list | None:
     """Cut box (x0, y0, x1, y1, inclusive) into one room per kind, sized by target.
 
     Recursive guillotine: kinds (first kept first, the rest shuffled by rng)
     split into two groups, a cut along the longer axis at the ratio of the
-    groups' target areas, then each side again. Targets are shares, so they
-    scale to the box. Every side stays >= MIN_ROOM; None when no cut allows it.
+    groups' areas, then each side again. The areas are room_areas of the
+    box's tiles: a bathroom stays near its target while the living room and
+    bedrooms take what is spare. Every side stays >= MIN_ROOM; None when no cut allows it.
     first_edge ("N" = y0, "S" = y1, "W" = x0, "E" = x1) makes the first kind's
     room touch that edge of the box. With a mask every room lies wholly inside
     it and the rooms cover exactly the box's masked tiles: a cut is kept only
     where each piece, trimmed to its masked bounding box, ends up as whole
     rectangles - a footprint no guillotine cut can carve gives None (fall back).
-    Rooms come back in kinds order, kind set, fixed=True.
+    `area` is the tiles the rooms are sized for, when not the box's own: a
+    box the footprint will clip is sized for the floor inside it, so every
+    room - the bathroom too - is drawn that much bigger and keeps about its
+    size once clipped. Rooms come back in kinds order, kind set, fixed=True.
     """
     from .layout import MIN_ROOM as M, Room
     if not kinds:
         return None
-    t = [SIZES[k].target for k in kinds]
     order = [0] + rng.sample(range(1, len(kinds)), len(kinds) - 1)
     side = {"W": 0, "N": 1, "E": 2, "S": 3}.get(first_edge)
     # ponytail: node cap, backtracking only happens on masked boxes; a mask
@@ -193,6 +256,7 @@ def split_by_targets(box: tuple[int, int, int, int], kinds: list[str],
         return None
 
     start = trim(box)
+    t = room_areas(kinds, area or tiles(start)) if start else []
     got = start and fits(start, order) and solve(start, order)
     if not got:
         return None

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from . import catalog as C
 from .uses import FRONT_ROOMS
 from .settings import Settings
-from .sizing import (SIZES, min_area, programme_for_flat,
+from .sizing import (SIZES, capacity, min_area, programme_for_flat,
                      programme_for_house_floor, split_by_targets)
 
 MIN_ROOM = 3          # smallest room dimension, in tiles
@@ -1266,16 +1266,19 @@ def _house_floor_bedrooms(bedrooms: int, levels: int, level: int) -> int:
     return _house_bedrooms_on_floor(bedrooms, levels - 1, level - 1) if level else 0
 
 
-# A house floor cut by kind is cut to rooms near their kind's target: spare
-# rooms are added while the floor is more than this many times the targets'
-# sum, so a big floor gets more rooms rather than a living room of 90 tiles -
-# up to one room per HOUSE_ROOM_TILES of floor and HOUSE_MAX_SPARE spares.
-HOUSE_GROW = 1.6
+# A house floor cut by kind gets spare rooms while it is bigger than its
+# rooms can fill (sizing.capacity: the big ones at their hi), so a big floor
+# gets more rooms rather than a living room of 90 tiles - up to one room per
+# HOUSE_ROOM_TILES of floor and HOUSE_MAX_SPARE spares.
 HOUSE_ROOM_TILES = 18
 HOUSE_MAX_SPARE = 12
 HOUSE_TOP_UP = ["office", "storage"]
-# Shuffles of a programme cut as a whole box before it sheds a room.
+HOUSE_LOSABLE = {"hall", *HOUSE_TOP_UP}
+# Shuffles of a programme cut as a whole box before it sheds a room, and of
+# the bare programme before the floor falls back: a 3x3 bathroom lands
+# clear of a turned footprint's corners only so often.
 HOUSE_TRIES = 3
+HOUSE_LAST_TRIES = 10
 
 
 def _house_by_kind(plan: Plan, level: int, levels: int,
@@ -1315,7 +1318,7 @@ def _house_by_kind(plan: Plan, level: int, levels: int,
             spare.insert(0, "bathroom")
         spare += [k for k in ("dining", "laundry") if k not in kinds]
     n = 0
-    while (area > HOUSE_GROW * sum(SIZES[k].target for k in kinds)
+    while (area > capacity(kinds)
            and n < HOUSE_MAX_SPARE and len(kinds) < area // HOUSE_ROOM_TILES):
         kinds.append(spare[n] if n < len(spare)
                      else HOUSE_TOP_UP[(n - len(spare)) % len(HOUSE_TOP_UP)])
@@ -1328,14 +1331,15 @@ def _house_by_kind(plan: Plan, level: int, levels: int,
             and (rooms := split_by_targets(box, kinds, rng, floor))):
         return rooms
     while True:
-        for _ in range(HOUSE_TRIES):
-            rooms = split_by_targets(box, kinds, rng)
-            # A spare room clipped away is no loss: what is left of it is
-            # folded into the room beside it or kept as a closet.
+        for _ in range(HOUSE_TRIES if len(kinds) > need else HOUSE_LAST_TRIES):
+            rooms = split_by_targets(box, kinds, rng, area=area)
+            # A spare room or the hall clipped away is no loss: what is left
+            # of it is folded into the room beside it or kept as a closet,
+            # and the stairs and the living room are walked through anyway.
             if rooms and not any(
                     not ps or len(ps[0]) < SIZES[r.kind].lo or _too_small(ps[0])
                     or (len(ps) > 1 and not _too_small(ps[1]))
-                    for r in rooms if r.kind not in HOUSE_TOP_UP
+                    for r in rooms if r.kind not in HOUSE_LOSABLE
                     for ps in [_pieces(r, floor)]):
                 return rooms
         if len(kinds) <= need:
