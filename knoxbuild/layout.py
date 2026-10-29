@@ -111,6 +111,8 @@ class Plan:
     # (x, y, "W" or "N") for the two-square wall edge facing the stair hall.
     shaft: tuple[int, int, int, int] | None = None
     shaft_door: tuple[int, int, str] | None = None
+    # Every lift on the storey as (rect, door), the first being shaft above.
+    shafts: list = field(default_factory=list)
     # Flats laid out open plan: one room for the kitchen and the living room
     # together. Decided when the flat is cut, not after - a flat already
     # divided into four equal rooms cannot be made open by renaming one of
@@ -3953,8 +3955,7 @@ def _furnish(plan: Plan, rng: random.Random,
     ways_in = list(plan.doors) + sorted(plan.open_edge)
     door_edges = set(plan.doors) | set(plan.open_edge)
     # The lift doors take their stretch of wall: nothing hangs on it.
-    if plan.shaft_door is not None:
-        lx, ly, ld = plan.shaft_door
+    for _rect, (lx, ly, ld) in plan.shafts:
         door_edges |= {(lx, ly + i, "W") if ld == "W" else (lx + i, ly, "N")
                        for i in range(SHAFT_SIZE)}
     for x, y, d in ways_in:
@@ -3971,8 +3972,7 @@ def _furnish(plan: Plan, rng: random.Random,
         dx, dy = (0, 1) if sd == "N" else (1, 0)
         stair_tiles = {(sx + dx * i, sy + dy * i) for i in range(STAIR_RUN)}
 
-    if plan.shaft_door is not None:
-        lx, ly, ld = plan.shaft_door
+    for _rect, (lx, ly, ld) in plan.shafts:
         plan.furniture.append(("elevator_door", lx, ly, ld))
 
     from . import interiors
@@ -4833,16 +4833,16 @@ def _cut_off_by_the_shaft(plan: Plan) -> None:
     Those tiles are better off not being part of the storey at all, which is
     what the arm is from the outside: roof.
     """
-    shaft_idx = next((i for i, r in enumerate(plan.rooms, 1) if r.is_shaft), 0)
-    if not shaft_idx:
+    sealed = {i for i, r in enumerate(plan.rooms, 1) if r.is_shaft}
+    if not sealed:
         return
     touching: dict[int, set[int]] = {}
     for (a, b) in _boundary_edges(plan):
-        if shaft_idx in (a, b):
+        if a in sealed or b in sealed:
             continue
         touching.setdefault(a, set()).add(b)
         touching.setdefault(b, set()).add(a)
-    rooms = [i for i in range(1, len(plan.rooms) + 1) if i != shaft_idx]
+    rooms = [i for i in range(1, len(plan.rooms) + 1) if i not in sealed]
     if not rooms:
         return
     # Out from the biggest room, which is the body of the building.
@@ -4873,8 +4873,10 @@ def _carve_shaft(plan: Plan, shaft: tuple[int, int, int, int],
     for y in range(y0, y1 + 1):
         for x in range(x0, x1 + 1):
             plan.grid[y][x] = idx
-    plan.shaft = shaft
-    plan.shaft_door = door
+    if plan.shaft is None:
+        plan.shaft = shaft
+        plan.shaft_door = door
+    plan.shafts.append((shaft, door))
     _renumber(plan)
     _mend_fragments(plan)
     _refit(plan)
@@ -5384,6 +5386,7 @@ def build_plan(width: int, height: int, commercial: bool = False,
                corridor: bool = False,
                shaft: tuple[int, int, int, int] | None = None,
                shaft_door: tuple[int, int, str] | None = None,
+               extra_shafts: list | None = None,
                street: str | None = None,
                uses: list[tuple[str, str]] | None = None,
                hotel: bool = False,
@@ -5492,6 +5495,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
             room.kind = "hall"
     if shaft is not None:
         _carve_shaft(plan, shaft, shaft_door)
+    for extra, extra_door in extra_shafts or ():
+        _carve_shaft(plan, extra, extra_door)
 
     # A cell is a cell: rooms far bigger than their kind ever is are cut down
     # now the kind is known, before any door is placed on them.

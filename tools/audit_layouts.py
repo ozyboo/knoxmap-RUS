@@ -165,25 +165,25 @@ def audit(building, kind):
                 problems["building with a hole in its roof"] += 1
     # Lifts: the mod finds a shaft by its doors at the same square on every
     # floor, so every storey needs the same shaft and a door hung on it.
-    shafts = [s.shaft for s in building.storeys]
+    shafts = [[r for r, _d in s.shafts] for s in building.storeys]
     if any(shafts):
-        if len(set(shafts)) != 1:
+        if len({tuple(x) for x in shafts}) != 1:
             problems["lift shaft moves between floors"] += 1
         for s in building.storeys:
             doors = [f for f in s.furniture if f[0] == "elevator_door"]
-            if len(doors) != 1:
+            if len(doors) != len(s.shafts):
                 problems["floor without lift doors"] += 1
                 continue
-            _r, lx, ly, ld = doors[0]
-            for i in range(2):
-                ax, ay = (lx, ly + i) if ld == "W" else (lx + i, ly)
-                bx, by = (ax - 1, ay) if ld == "W" else (ax, ay - 1)
-                sides = {s.grid[ay][ax] if 0 <= ax < s.width and 0 <= ay < s.height else 0,
-                         s.grid[by][bx] if 0 <= bx < s.width and 0 <= by < s.height else 0}
-                kinds = {s.rooms[v - 1].is_shaft for v in sides if v}
-                if 0 in sides or kinds != {True, False}:
-                    problems["lift doors not between shaft and landing"] += 1
-                    break
+            for _r, lx, ly, ld in doors:
+                for i in range(2):
+                    ax, ay = (lx, ly + i) if ld == "W" else (lx + i, ly)
+                    bx, by = (ax - 1, ay) if ld == "W" else (ax, ay - 1)
+                    sides = {s.grid[ay][ax] if 0 <= ax < s.width and 0 <= ay < s.height else 0,
+                             s.grid[by][bx] if 0 <= bx < s.width and 0 <= by < s.height else 0}
+                    kinds = {s.rooms[v - 1].is_shaft for v in sides if v}
+                    if 0 in sides or kinds != {True, False}:
+                        problems["lift doors not between shaft and landing"] += 1
+                        break
     elif len(building.storeys) >= ELEVATOR_FROM_LEVELS and \
             min(building.width, building.height) >= ELEVATOR_MIN_SIDE:
         problems["tall building without a lift"] += 1
