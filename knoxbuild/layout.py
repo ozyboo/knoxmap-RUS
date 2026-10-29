@@ -5486,6 +5486,138 @@ def _open_up(storey: "Plan", starts: set) -> set:
     return gone
 
 
+_STEP = {"N": (0, -1), "W": (-1, 0), "S": (0, 1), "E": (1, 0)}
+
+
+def _make_way_for_windows(storey: "Plan", stairs: tuple[int, int, str] | None) -> int:
+    """Stand whatever blocks a window square against another wall of its room.
+
+    Windows go in after the rooms are furnished, so nobody knew where they
+    would land, and the square inside one had to be cleared for the window to
+    be opened, climbed through and seen out of. Deleting what stood there was
+    nine in ten of everything the clear-up took out. A one-tile piece, and
+    what stands on it, moves to the nearest free wall tile of the same room
+    that keeps the floor in one piece; with no such tile it trades places with
+    a one-tile piece of the same room that may stand at a window. Only what
+    cannot move is left for _open_up. Returns the number of pieces moved.
+
+    A door slid off a corner after furnishing (_doors_off_corners) can land
+    with a piece in its clearance; that clearance is cleared the same way,
+    with no exception for what may stand at a window."""
+    w, h, grid = storey.width, storey.height, storey.grid
+    squares = set()
+    for x, y, d in storey.windows:
+        for tx, ty in (((x - 1, y), (x, y)) if d == "W" else ((x, y - 1), (x, y))):
+            if 0 <= tx < w and 0 <= ty < h and grid[ty][tx]:
+                squares.add((tx, ty))
+    door_tiles = _door_tiles(storey)
+    at_door = {(x, y) for x, y in door_tiles if 0 <= x < w and 0 <= y < h and grid[y][x]}
+    if not squares and not at_door:
+        return 0
+    off = squares | door_tiles
+    if stairs is not None:
+        sx, sy, sd = stairs
+        dx, dy = (0, 1) if sd == "N" else (1, 0)
+        off |= {(sx + dx * i, sy + dy * i) for i in range(STAIR_RUN)}
+    furniture = storey.furniture
+    cells_of = [_cells_for(role, x, y, o) for role, x, y, o in furniture]
+    on_floor: dict = {}
+    for i, f in enumerate(furniture):
+        if not _is_wall_piece(f[0]):
+            for c in cells_of[i]:
+                on_floor.setdefault(c, []).append(i)
+    hung = {(f[1], f[2]) for f in furniture if f[0] in ("wall_cabinet", "microwave")}
+
+    def fits(pieces, x, y, face) -> bool:
+        """Whether each piece, turned to face that wall, still covers one tile:
+        a side table is one tile one way and two the other."""
+        return all(_cells_for(furniture[i][0], x, y, _facing(furniture[i][0], face))
+                   == [(x, y)] for i in pieces)
+
+    def put(pieces, x, y, face) -> None:
+        for i in pieces:
+            for c in cells_of[i]:
+                on_floor[c].remove(i)
+            role = furniture[i][0]
+            furniture[i] = (role, x, y, _facing(role, face))
+            cells_of[i] = [(x, y)]
+            on_floor.setdefault((x, y), []).append(i)
+
+    def wall_of(t, facings):
+        return next((f for f in facings
+                     if (t[0] + _STEP[f][0], t[1] + _STEP[f][1]) not in cells), None)
+
+    def nearest(tiles):
+        return sorted(tiles, key=lambda d: (abs(d[0] - t[0]) + abs(d[1] - t[1]), d[1], d[0]))
+
+    rooms: dict = {}
+    moved = 0
+    for t in sorted(squares | at_door):
+        stack = sorted(on_floor.get(t, ()))
+        roles = [furniture[i][0] for i in stack]
+        if (not any(_blocks(r) for r in roles)
+                or (t not in at_door and all(_under_a_window(r) for r in roles))
+                or any(len(cells_of[i]) > 1 for i in stack)
+                or t in hung):
+            continue
+        idx = grid[t[1]][t[0]]
+        if idx not in rooms:
+            r = storey.rooms[idx - 1]
+            cells = {(x, y) for y in range(r.y0, r.y1 + 1)
+                     for x in range(r.x0, r.x1 + 1) if grid[y][x] == idx}
+            rooms[idx] = cells, _room_walkway(storey, idx, door_tiles, stairs)
+        cells, walk = rooms[idx]
+        blocked = {c for i, f in enumerate(furniture) if _blocks(f[0])
+                   for c in cells_of[i]} & cells
+        blocked.discard(t)
+        # The tile something is opened from stays floor.
+        fronts = {(cx - _STEP[f[3]][0], cy - _STEP[f[3]][1])
+                  for i, (f, cs) in enumerate(zip(furniture, cells_of))
+                  if _needs_front(f[0]) and f[3] in _STEP and i not in stack
+                  for cx, cy in cs}
+        nw_only = any(r in NORTH_WEST_ONLY for r in roles)
+        facings = ("N", "W") if nw_only else ("N", "W", "S", "E")
+        front = any(_needs_front(r) for r in roles)
+
+        def opened(d, face) -> bool:
+            ahead = (d[0] - _STEP[face][0], d[1] - _STEP[face][1])
+            return not front or (ahead in cells and ahead not in blocked)
+
+        covered = {c for cs in cells_of for c in cs}
+        for d in nearest(cells - off - walk - covered - fronts):
+            face = wall_of(d, facings)
+            if (face is None or not opened(d, face) or not fits(stack, *d, face)
+                    or not FR.keeps_floor_open(cells, blocked, walk, {d}, POCKET_TILES)):
+                continue
+            put(stack, *d, face)
+            moved += len(stack)
+            break
+        else:
+            # No free wall: trade places with a one-tile piece that may stand
+            # at a window - a bare counter for the sink, a table for the
+            # dresser. Both tiles stay taken, so the floor is as it was.
+            if t in at_door:
+                continue
+            here = wall_of(t, "NWSE")
+            # A wall cabinet keeps a counter under it.
+            keep = off if any(r.startswith("counter") for r in roles) else off | hung
+            for c in nearest(set(on_floor) & cells - keep):
+                other = sorted(on_floor[c])
+                if not any(_blocks(furniture[j][0]) for j in other) or any(
+                        len(cells_of[j]) > 1 or not _under_a_window(furniture[j][0])
+                        for j in other):
+                    continue
+                face = wall_of(c, facings)
+                if (face is None or here is None or not opened(c, face)
+                        or not fits(stack, *c, face) or not fits(other, *t, here)):
+                    continue
+                put(stack, *c, face)
+                put(other, *t, here)
+                moved += len(stack) + len(other)
+                break
+    return moved
+
+
 def _clear_the_way(building: "Building") -> int:
     """Take out whatever stands between a doorway and the rooms behind it.
 
@@ -5494,7 +5626,9 @@ def _clear_the_way(building: "Building") -> int:
     connected - every audit of it passed - but the furnished building was not.
     """
     removed = 0
+    stairs = building.stairs[0] if building.stairs else None
     for level, storey in enumerate(building.storeys):
+        _make_way_for_windows(storey, stairs)
         starts = _ways_in(building, level, storey)
         if not starts:
             continue

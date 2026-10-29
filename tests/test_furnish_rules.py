@@ -280,7 +280,66 @@ class ClearUpByPriority(unittest.TestCase):
         self.assertEqual(layout._open_up(plan, {(0, 2)}), {0, 1})
 
 
-# route-removal threshold test lands in Task 5, after moved-door and window-path clearing
+class ClearUpAfterBuild(unittest.TestCase):
+    """Full SAMPLE builds, recording what _open_up takes out."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.removed = []      # (role, room kind, touches a window square)
+        orig = layout._open_up
+
+        def spy(storey, starts):
+            gone = orig(storey, starts)
+            win = set()
+            for x, y, d in storey.windows:
+                win |= {(x - 1, y), (x, y)} if d == "W" else {(x, y - 1), (x, y)}
+            for i in gone:
+                role, x, y, o = storey.furniture[i]
+                idx = storey.grid[y][x]
+                kind = storey.rooms[idx - 1].kind if idx else ""
+                cls.removed.append(
+                    (role, kind, bool(set(layout._tiles_under(role, x, y, o)) & win)))
+            return gone
+
+        with mock.patch.object(layout, "_open_up", spy):
+            cls.builds = [layout.build_building(**args) for _k, _s, args in SAMPLE]
+        cls.placed = len(cls.removed) + sum(
+            len(s.furniture) for b in cls.builds for s in b.storeys)
+
+    def test_few_pieces_removed(self):
+        self.assertLess(len(self.removed) / self.placed, 0.03)
+
+    def test_essentials_not_removed(self):
+        lost = [(r, k) for r, k, _w in self.removed if priority(r, k) == ESSENTIAL]
+        self.assertLessEqual(len(lost), 5, lost)
+
+    def test_route_removals_drop(self):
+        # Pieces taken out that do not touch a window square: doors moved off
+        # corners after furnishing and paths to window squares, once those are
+        # cleared, leave next to nothing (baseline 166 = 1.25%).
+        route = [(r, k) for r, k, w in self.removed if not w]
+        self.assertLessEqual(len(route), 0.003 * self.placed, route)
+
+    def test_rooms_keep_their_essentials(self):
+        want = {"bathroom": (("toilet",), 0.87), "kitchen": (("fridge",), 0.87),
+                "bedroom": (("bed", "double_bed"), 0.78),
+                "livingroom": (("sofa",), 0.95)}
+        rooms = dict.fromkeys(want, 0)
+        have = dict.fromkeys(want, 0)
+        for b in self.builds:
+            for s in b.storeys:
+                for idx, r in enumerate(s.rooms, 1):
+                    if r.kind not in want:
+                        continue
+                    rooms[r.kind] += 1
+                    have[r.kind] += any(role.startswith(want[r.kind][0])
+                                        for role, x, y, _o in s.furniture
+                                        if s.grid[y][x] == idx)
+        for kind, (_roles, floor) in want.items():
+            with self.subTest(kind=kind):
+                self.assertGreaterEqual(have[kind] / rooms[kind], floor)
+
+
 
 if __name__ == "__main__":
     unittest.main()

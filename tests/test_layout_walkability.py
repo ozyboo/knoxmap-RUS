@@ -4,7 +4,7 @@ from knoxbuild import layout
 
 
 class FurnishedRoomWalkability(unittest.TestCase):
-    def test_furniture_is_removed_from_window_approach(self):
+    def test_furniture_is_moved_off_the_window_approach(self):
         room = layout.Room(0, 0, 4, 4, kind="livingroom")
         plan = layout.Plan(
             5, 5, rooms=[room], grid=[[1] * 5 for _ in range(5)],
@@ -14,8 +14,41 @@ class FurnishedRoomWalkability(unittest.TestCase):
 
         removed = layout._clear_the_way(building)
 
+        self.assertEqual(removed, 0)
+        shelves = [f for f in plan.furniture if f[0] == "bookshelf"]
+        self.assertEqual(len(shelves), 1)
+        self.assertNotEqual(shelves[0][1:3], (0, 2))
+
+    def test_window_square_is_cleared_when_nothing_can_move(self):
+        room = layout.Room(0, 0, 2, 2, kind="livingroom")
+        furniture = [("bookshelf", 0, 1, "W")]
+        furniture += [("dresser", x, y, "N")
+                      for x, y in ((0, 0), (2, 0), (2, 1), (0, 2), (1, 2), (2, 2))]
+        plan = layout.Plan(
+            3, 3, rooms=[room], grid=[[1] * 3 for _ in range(3)],
+            doors=[(1, 0, "N")], windows=[(0, 1, "W")], furniture=furniture)
+        building = layout.Building(3, 3, storeys=[plan])
+
+        removed = layout._clear_the_way(building)
+
         self.assertEqual(removed, 1)
-        self.assertNotIn(("bookshelf", 0, 2, "N"), plan.furniture)
+        self.assertFalse([f for f in plan.furniture if f[0] == "bookshelf"])
+
+    def test_a_wall_cabinet_keeps_its_counter(self):
+        # Nowhere free to stand the dresser: the bare counter could trade
+        # places with it, but would leave the cabinet over a dresser.
+        room = layout.Room(0, 0, 2, 2, kind="kitchen")
+        furniture = [("dresser", 0, 1, "W"), ("counter", 2, 1, "E"),
+                     ("wall_cabinet", 2, 1, "E")]
+        furniture += [("dresser", x, y, "N")
+                      for x, y in ((0, 0), (2, 0), (0, 2), (1, 2), (2, 2))]
+        plan = layout.Plan(
+            3, 3, rooms=[room], grid=[[1] * 3 for _ in range(3)],
+            doors=[(1, 0, "N")], windows=[(0, 1, "W")], furniture=furniture)
+
+        layout._make_way_for_windows(plan, None)
+
+        self.assertIn(("counter", 2, 1, "E"), plan.furniture)
 
     def test_furniture_partition_is_opened_for_room_walkability(self):
         room = layout.Room(0, 0, 4, 4, kind="livingroom")
