@@ -4077,8 +4077,10 @@ _TURN = {"W": "N", "N": "W", "E": "S", "S": "E"}
 def _furnish_middle(plan: Plan, idx: int, room: Room,
                     occupied: set[tuple[int, int]],
                     keep_clear: set[tuple[int, int]],
-                    palette: dict[str, str] | None = None) -> int:
-    """Put the room's centre group(s) in its open middle. Returns how many."""
+                    palette: dict[str, str] | None = None,
+                    keeps_open=None) -> int:
+    """Put the room's centre group(s) in its open middle. Returns how many.
+    keeps_open(tiles), when given, may refuse a spot that cuts the floor."""
     spec = CENTRE_GROUPS.get(room.kind)
     if room.kind == "lobby" and (plan.kind in CIVIC_KINDS or plan.kind == "apartment"):
         spec = ([("shop_counter", 1, 0, "N"), ("chair", 0, 2, "S"),
@@ -4092,7 +4094,8 @@ def _furnish_middle(plan: Plan, idx: int, room: Room,
 
     group, repeat = spec
     before = len(plan.furniture)
-    placed = _place_group(plan, idx, room, own(group), repeat, occupied, keep_clear)
+    placed = _place_group(plan, idx, room, own(group), repeat, occupied, keep_clear,
+                          keeps_open)
     fallbacks = FALLBACK_GROUPS.get(room.kind, ())
     if room.kind == "lobby" and (plan.kind in CIVIC_KINDS or plan.kind == "apartment"):
         fallbacks = [[("shop_counter", 0, 0, "N"), ("chair", 0, 2, "S")],
@@ -4100,9 +4103,10 @@ def _furnish_middle(plan: Plan, idx: int, room: Room,
     for smaller in fallbacks:
         if placed:
             break
-        placed = _place_group(plan, idx, room, own(smaller), 1, occupied, keep_clear)
+        placed = _place_group(plan, idx, room, own(smaller), 1, occupied, keep_clear,
+                              keeps_open)
     if placed:
-        _seat_the_table(plan, idx, keep_clear, plan.furniture[before:])
+        _seat_the_table(plan, idx, keep_clear, plan.furniture[before:], keeps_open)
     return placed
 
 
@@ -4116,7 +4120,7 @@ _BESIDE = (((-1, 0), "W"), ((1, 0), "E"), ((0, -1), "N"), ((0, 1), "S"))
 
 
 def _seat_the_table(plan: Plan, idx: int, keep_clear: set[tuple[int, int]],
-                    added: list) -> None:
+                    added: list, keeps_open=None) -> None:
     """Chairs on the free tiles beside a table the centre group just put down."""
     tables = [(role, x, y, o) for role, x, y, o in added
               if role in ("round_table", "dining_table")]
@@ -4137,6 +4141,8 @@ def _seat_the_table(plan: Plan, idx: int, keep_clear: set[tuple[int, int]],
                 x, y = cell[0] + dx, cell[1] + dy
                 if (x, y) in taken or (x, y) in keep_clear or _room_at(plan, x, y) != idx:
                     continue
+                if keeps_open and not keeps_open({(x, y)}):
+                    continue
                 plan.furniture.append(("chair", x, y, _facing("chair", side)))
                 taken.add((x, y))
                 seats += 1
@@ -4155,8 +4161,9 @@ def _once(role: str) -> bool:
 def _place_group(plan: Plan, idx: int, room: Room,
                  group: list[tuple[str, int, int, str]], repeat: int,
                  occupied: set[tuple[int, int]],
-                 keep_clear: set[tuple[int, int]]) -> int:
-    """Up to `repeat` copies of one group, nearest the room's middle first."""
+                 keep_clear: set[tuple[int, int]], keeps_open=None) -> int:
+    """Up to `repeat` copies of one group, nearest the room's middle first,
+    skipping a spot whose solid tiles keeps_open(tiles) refuses."""
     if (room.x1 - room.x0) < (room.y1 - room.y0):
         # Rugs are drawn one way round whatever their orient, so a turned
         # group swaps the wide rug for the long one.
@@ -4186,6 +4193,8 @@ def _place_group(plan: Plan, idx: int, room: Room,
                 for x in range(ox + gx0 - 1, ox + gx1 + 2)}
         if any(_room_at(plan, x, y) != idx or (x, y) in occupied
                or (x, y) in keep_clear for x, y in ring):
+            continue
+        if keeps_open and not keeps_open({(ox + x, oy + y) for x, y in solid}):
             continue
         for role, dx, dy, o in pieces:
             plan.furniture.append((role, ox + dx, oy + dy, o))
@@ -4340,6 +4349,7 @@ def _furnish(plan: Plan, rng: random.Random,
         # A lift car has no switch and no furniture: it is a sealed box.
         if r.is_shaft:
             continue
+        start = len(plan.furniture)
         # Walls this room has, as (x, y, facing) for a piece standing on the
         # tile with its back to that wall.
         slots = []
@@ -4422,6 +4432,16 @@ def _furnish(plan: Plan, rng: random.Random,
         walk = _room_walkway(plan, idx, door_tiles, stairs)
         keep_clear = door_tiles | stair_tiles | walk
         no_go = door_tiles | walk
+        room_cells = {(x, y) for y in range(r.y0, r.y1 + 1)
+                      for x in range(r.x0, r.x1 + 1) if plan.grid[y][x] == idx}
+
+        def keeps_open(tiles) -> bool:
+            """Whether a new blocking piece on `tiles` leaves the walkway clear
+            and cuts off no patch of floor bigger than a pocket. Only this
+            room's pieces have gone in since `start`."""
+            blocked = {c for role, x, y, o in plan.furniture[start:] if _blocks(role)
+                       for c in _cells_for(role, x, y, o)}
+            return FR.keeps_floor_open(room_cells, blocked, walk, set(tiles), POCKET_TILES)
         # Nothing standing goes in the stair hall or corridor: a flat's front
         # door and the only way past the flight both run through it, and one
         # bookcase beside the stairs closes the corridor.
@@ -4485,10 +4505,12 @@ def _furnish(plan: Plan, rng: random.Random,
                 mechanic=(r.kind == "mechanic")):
             continue
         if office:
-            base = interiors.furnish_office(plan, idx, r, rng, occupied, keep_clear)
+            base = interiors.furnish_office(plan, idx, r, rng, occupied, keep_clear,
+                                            keeps_open)
         elif eatery:
             base = interiors.furnish_dining(plan, idx, r, rng, occupied,
-                                            stair_tiles | walk, door_tiles, street)
+                                            stair_tiles | walk, door_tiles, street,
+                                            keeps_open)
         elif commercial_kitchen:
             base = interiors.KITCHEN_KIT.get(r.kind, interiors.DEFAULT_KITCHEN_KIT)
         elif r.kind == "bathroom":
@@ -4586,42 +4608,6 @@ def _furnish(plan: Plan, rng: random.Random,
             if role.startswith("counter") and wishlist.count(role) >= WISHLIST_COUNTERS:
                 continue
             wishlist.append(role)
-        # The middle first, with an aisle round it the wall pieces must leave
-        # free; placed after them, it almost never found room.
-        before = len(plan.furniture)
-        if r.kind == "classroom" and "whiteboard" in wishlist:
-            preferred = "N" if r.w >= r.h else "W"
-            board_slots = sorted(
-                (s for s in slots if s[2] == preferred),
-                key=lambda s: (on_facade(s),
-                               abs(s[0] - (r.x0 + r.x1) / 2)
-                               + abs(s[1] - (r.y0 + r.y1) / 2)))
-            for slot in board_slots:
-                if hang("whiteboard", *slot):
-                    wishlist.remove("whiteboard")
-                    break
-        if not office and not eatery:
-            _furnish_middle(plan, idx, r, occupied, keep_clear, pal)
-        # The center group already supplied its focal pieces; do not add them
-        # again from the room wishlist.
-        for role, *_ in plan.furniture[before:]:
-            consumed = (_once(role)
-                        or (r.kind == "church" and role == "table")
-                        or (r.kind == "motelroom" and role == "sidetable")
-                        or (r.kind == "lobby"
-                            and (plan.kind in CIVIC_KINDS or plan.kind == "apartment")
-                            and role == "shop_counter"))
-            if role in wishlist and consumed:
-                wishlist.remove(role)
-        # A bed goes head to a wall between its bedside tables.
-        if r.kind in ("bedroom", "kidsbedroom"):
-            bed = next((role for role in wishlist if role in (pal.get("double_bed"), pal.get("bed"))
-                        or role.startswith(("double_bed", "bed"))), None)
-            if bed and interiors.bed_against_wall(plan, idx, r, slots, occupied, no_go,
-                                                  bed, "sidetable"):
-                wishlist.remove(bed)
-                if "sidetable" in wishlist:
-                    wishlist.remove("sidetable")
         plumbing_rooms = KITCHENS | {"kitchen", "bathroom", "laundry"}
         side_scores = {side: [0, 0, 0] for side in step}
         for x, y, facing in slots:
@@ -4646,7 +4632,26 @@ def _furnish(plan: Plan, rng: random.Random,
             return side_rank[facing], -distance, y, x
 
         floor_slots = sorted(slots, key=slot_order)
-        for role in wishlist:
+
+        def centre():
+            # The middle, with an aisle round it the wall pieces must leave
+            # free; placed after them, it almost never found room.
+            before = len(plan.furniture)
+            if not office and not eatery:
+                _furnish_middle(plan, idx, r, occupied, keep_clear, pal, keeps_open)
+            # The center group already supplied its focal pieces; do not add
+            # them again from the room wishlist.
+            for role, *_ in plan.furniture[before:]:
+                consumed = (_once(role)
+                            or (r.kind == "church" and role == "table")
+                            or (r.kind == "motelroom" and role == "sidetable")
+                            or (r.kind == "lobby"
+                                and (plan.kind in CIVIC_KINDS or plan.kind == "apartment")
+                                and role == "shop_counter"))
+                if role in wishlist and consumed:
+                    wishlist.remove(role)
+
+        def place(role):
             if role == "bath_mat":
                 # A mat is walked over, so it may lie on the walkway.
                 mat = _bath_mat_spot(plan, idx, r, occupied, door_tiles | stair_tiles)
@@ -4654,7 +4659,7 @@ def _furnish(plan: Plan, rng: random.Random,
                     mx, my, mat_orient, mat_cells = mat
                     plan.furniture.append((role, mx, my, mat_orient))
                     occupied.update(mat_cells)
-                continue
+                return
             if role == "mirror" and r.kind == "bathroom":
                 basin = next(((x, y, orient) for basin_role, x, y, orient
                               in plan.furniture
@@ -4665,22 +4670,18 @@ def _furnish(plan: Plan, rng: random.Random,
                     near_basin = sorted(
                         (slot for slot in slots if slot[2] == facing),
                         key=lambda slot: abs(slot[0] - bx) + abs(slot[1] - by))
-                    mirror_placed = False
                     for slot in near_basin:
                         if not hang("mirror", *slot):
                             continue
                         mirror_orient = _facing("mirror", slot[2])
                         occupied.update(_cells_for("mirror", slot[0], slot[1],
                                                    mirror_orient))
-                        mirror_placed = True
-                        break
-                    if mirror_placed:
-                        continue
+                        return
             if _is_wall_piece(role):
                 for x, y, facing in sorted(floor_slots, key=on_facade):
                     if hang(role, x, y, facing):
                         break
-                continue
+                return
             for (x, y, wanted) in floor_slots:
                 if role in NORTH_WEST_ONLY and wanted in ("S", "E"):
                     continue
@@ -4699,19 +4700,60 @@ def _furnish(plan: Plan, rng: random.Random,
                     front = {(cx + fx, cy + fy) for cx, cy in cells} - set(cells)
                     if any(c in occupied or _room_at(plan, *c) != idx for c in front):
                         continue
+                # Nothing standing that shuts off a patch of the floor.
+                if _blocks(role) and not keeps_open(cells):
+                    continue
                 occupied.update(cells)
                 occupied.update(front)
                 plan.furniture.append((role, ax, ay, orient))
-                break
+                return
+
+        # Most important first, so a plant cannot take the fridge's place:
+        # the whiteboard, the centre group if it holds an essential (the
+        # sofa), the bed, the other essentials, the centre group otherwise,
+        # then the rest, secondary before decoration.
+        if r.kind == "classroom" and "whiteboard" in wishlist:
+            preferred = "N" if r.w >= r.h else "W"
+            board_slots = sorted(
+                (s for s in slots if s[2] == preferred),
+                key=lambda s: (on_facade(s),
+                               abs(s[0] - (r.x0 + r.x1) / 2)
+                               + abs(s[1] - (r.y0 + r.y1) / 2)))
+            for slot in board_slots:
+                if hang("whiteboard", *slot):
+                    wishlist.remove("whiteboard")
+                    break
+        centre_first = any(
+            FR.priority(pal.get(role, role), r.kind) == FR.ESSENTIAL
+            for role, *_ in CENTRE_GROUPS.get(r.kind, ((), 0))[0])
+        if centre_first:
+            centre()
+        # A bed goes head to a wall between its bedside tables.
+        if r.kind in ("bedroom", "kidsbedroom"):
+            bed = next((role for role in wishlist if role in (pal.get("double_bed"), pal.get("bed"))
+                        or role.startswith(("double_bed", "bed"))), None)
+            if bed and interiors.bed_against_wall(plan, idx, r, slots, occupied, no_go,
+                                                  bed, "sidetable", keeps_open):
+                wishlist.remove(bed)
+                if "sidetable" in wishlist:
+                    wishlist.remove("sidetable")
+        for role in [x for x in wishlist if FR.priority(x, r.kind) == FR.ESSENTIAL]:
+            place(role)
+        if not centre_first:
+            centre()
+        for role in FR.in_priority_order(
+                [x for x in wishlist if FR.priority(x, r.kind) != FR.ESSENTIAL], r.kind):
+            place(role)
 
         if commercial_kitchen:
             # Steel counters, and no wall cupboards or microwave. A working
             # kitchen really is worktop wall to wall, so it keeps no budget.
             _counter_runs(plan, idx, slots, occupied, no_go, stair_tiles,
-                          "counter_2", cabinets=False)
+                          "counter_2", cabinets=False, keeps_open=keeps_open)
         elif r.kind in KITCHENS:
             _counter_runs(plan, idx, slots, occupied, no_go, stair_tiles,
-                          pal.get("counter", "counter"), area=r.area, rng=rng)
+                          pal.get("counter", "counter"), area=r.area, rng=rng,
+                          keeps_open=keeps_open)
         _stand_on_something(plan, idx, r, pal)
 
 
@@ -4908,7 +4950,7 @@ WISHLIST_COUNTERS = 2
 def _counter_runs(plan: Plan, idx: int, slots, occupied: set,
                   door_tiles: set, stair_tiles: set, counter: str = "counter",
                   cabinets: bool = True, area: int = 0,
-                  rng: random.Random | None = None) -> None:
+                  rng: random.Random | None = None, keeps_open=None) -> None:
     """Fitted counters along a kitchen's two longest walls, up to what the
     floor is worth.
 
@@ -4941,6 +4983,8 @@ def _counter_runs(plan: Plan, idx: int, slots, occupied: set,
             if any(c in occupied or c in door_tiles or c in stair_tiles for c in cells):
                 continue
             if any(_room_at(plan, cx, cy) != idx for cx, cy in cells):
+                continue
+            if keeps_open and not keeps_open(cells):
                 continue
             # A corner tile is on two walls; one counter is enough.
             occupied.update(cells)

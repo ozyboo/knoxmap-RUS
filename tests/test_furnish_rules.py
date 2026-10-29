@@ -1,8 +1,10 @@
+import copy
 import random
 import unittest
 from unittest import mock
 
 from knoxbuild import catalog, layout
+from knoxbuild import furnish_rules as FR
 from knoxbuild.furnish_rules import (
     DECORATION, DECORATION_ROLES, ESSENTIAL, ESSENTIALS, SECONDARY,
     in_priority_order, keeps_floor_open, priority, walkway)
@@ -212,6 +214,63 @@ class WalkwayIsKeptClear(unittest.TestCase):
                                 for role, x, y, _o in s.furniture if s.grid[y][x] == idx)
         self.assertGreaterEqual(beds / rooms, 0.80)
 
+
+class PriorityWhenTight(unittest.TestCase):
+    def setUp(self):
+        self._erika = list(layout._ERIKA_ALLOWED)
+        layout.use_mod_tiles(False)
+
+    def tearDown(self):
+        layout._ERIKA_ALLOWED[:] = self._erika
+        layout._ERIKA.clear()
+
+    def test_essentials_go_in_before_decoration(self):
+        room = layout.Room(0, 0, 2, 2, kind="kitchen")
+        plan = layout.Plan(3, 3, rooms=[room], grid=[[1] * 3 for _ in range(3)],
+                           doors=[(0, 1, "W")], kind="house")
+        style = {"kitchen": (12, "Kitchen", ["plant"] * 8 + ["fridge"])}
+        with mock.patch.dict(layout.ROOM_STYLE, style):
+            for seed in range(10):
+                p = copy.deepcopy(plan)
+                layout._furnish(p, random.Random(seed))
+                roles = [f[0] for f in p.furniture]
+                with self.subTest(seed=seed):
+                    self.assertTrue(any(r.startswith("fridge") for r in roles), roles)
+                    self.assertLessEqual(roles.count("plant"), 6, roles)
+
+
+class FloorStaysInOnePiece(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.builds = furnish_time_builds()
+
+    def test_free_floor_hangs_together(self):
+        for kind, seed, b in self.builds:
+            stairs = b.stairs[0] if b.stairs else None
+            for level, s in enumerate(b.storeys):
+                doors = layout._door_tiles(s)
+                blocked = {t for role, x, y, o in s.furniture if layout._blocks(role)
+                           for t in layout._cells_for(role, x, y, o)}
+                for idx, r in enumerate(s.rooms, 1):
+                    if r.is_core or r.is_shaft:
+                        continue
+                    cells = {(x, y) for y, row in enumerate(s.grid)
+                             for x, v in enumerate(row) if v == idx}
+                    walk = layout._room_walkway(s, idx, doors, stairs)
+                    with self.subTest(kind=kind, seed=seed, level=level, room=r.kind):
+                        self.assertTrue(FR.keeps_floor_open(
+                            cells, blocked & cells, walk, set(), layout.POCKET_TILES))
+
+    def test_same_seed_same_furniture(self):
+        args = next(a for k, sd, a in SAMPLE if k == "house" and sd == 3)
+        with mock.patch.object(layout, "_place_windows", lambda *a, **k: None),                 mock.patch.object(layout, "_clear_the_way", lambda *a, **k: 0):
+            one = layout.build_building(**args)
+            two = layout.build_building(**args)
+        self.assertEqual([s.furniture for s in one.storeys],
+                         [s.furniture for s in two.storeys])
+
+
+# route-removal threshold test lands in Task 5, after moved-door and window-path clearing
 
 if __name__ == "__main__":
     unittest.main()
