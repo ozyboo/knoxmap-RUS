@@ -58,11 +58,14 @@ def min_area(programme: list[str]) -> int:
 
 def programme_for_flat(area: int, rng: random.Random,
                        open_plan: bool = False) -> list[str] | None:
-    """Studio, 1-, 2- or 3-bed flat by area; None when below a studio's lo sum."""
+    """Studio, 1-, 2- or 3-bed flat by area; None when below a studio's lo sum.
+
+    A studio is always open plan: one room with its kitchen, and a bathroom.
+    """
     living = "openplan" if open_plan else "livingroom"
     kitchen = [] if open_plan else ["kitchen"]
     plans = [
-        [living, "bathroom"],
+        ["openplan", "bathroom"],
         [living, *kitchen, "bedroom", "bathroom"],
         [living, *kitchen, "bedroom", rng.choice(_BEDS), "bathroom"],
         ["hall", living, *kitchen, "bedroom", "bedroom", "kidsbedroom",

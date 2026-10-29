@@ -20,7 +20,8 @@ class Sizes(unittest.TestCase):
 
 class Programmes(unittest.TestCase):
     def test_studio(self):
-        p = S.programme_for_flat(S.min_area(["livingroom", "bathroom"]), random.Random(1))
+        p = S.programme_for_flat(S.min_area(["openplan", "bathroom"]), random.Random(1))
+        self.assertEqual(p, ["openplan", "bathroom"])   # a studio has its kitchen
         self.assertEqual(sum(k in ("livingroom", "openplan") for k in p), 1)
         self.assertEqual(p.count("bathroom"), 1)
 
@@ -55,7 +56,7 @@ class Programmes(unittest.TestCase):
                         self.assertLessEqual(S.min_area(p), area)
 
     def test_none_just_below_smallest(self):
-        studio = S.min_area(["livingroom", "bathroom"])
+        studio = S.min_area(["openplan", "bathroom"])
         self.assertIsNone(S.programme_for_flat(studio - 1, random.Random(0)))
         self.assertIsNotNone(S.programme_for_flat(studio, random.Random(0)))
         open_min = S.min_area(["openplan", "bathroom"])
@@ -219,6 +220,34 @@ class Flats(unittest.TestCase):
         for seed in range(10):
             b = L.build_building(6, 5, levels=2, kind="apartment", seed=seed)
             self.assertTrue(all(s.rooms for s in b.storeys))
+
+    def test_masked_flats_keep_bathroom(self):
+        # Irregular and turned footprints, as tools/audit_layouts.py builds them.
+        import os
+        import sys
+        from knoxbuild import layout as L
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools"))
+        from audit_layouts import irregular_mask, rotated_mask
+        rng, bad = random.Random(4242), []
+        for i in range(140):
+            w, h = rng.randint(9, 40), rng.randint(9, 40)
+            if i % 2:
+                mask = irregular_mask(w, h, rng)
+            else:
+                fp = rotated_mask(rng)
+                if fp is None:
+                    continue
+                w, h, mask = fp.width, fp.height, fp.mask_list()
+            b = L.build_building(w, h, levels=rng.choice((2, 3, 4, 5)), seed=i,
+                                 kind="apartment", mask=mask)
+            for n, plan in enumerate(b.storeys):
+                for u in {r.unit for r in plan.rooms if r.unit}:
+                    rooms = [r for r in plan.rooms if r.unit == u]
+                    if (len(rooms) >= 2 and any(r.fixed for r in rooms)
+                            and not any(r.kind == "bathroom" for r in rooms)):
+                        bad.append((i, n, u))
+        self.assertEqual(bad, [])
 
     def test_hotel_unchanged(self):
         import hashlib

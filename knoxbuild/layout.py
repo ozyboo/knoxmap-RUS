@@ -886,14 +886,14 @@ def _flat_by_kind(box: tuple[int, int, int, int], rng: random.Random,
         rooms = split_by_targets(box, kinds, rng, mask, edge)
         # Cut to the footprint, only one flat in seven on an irregular or
         # turned one found a cut at all. Failing that, the whole box is cut
-        # and _paint clips it - kept only where every room keeps its kind's
-        # least floor inside the walls, or the bathroom is the first to go.
+        # and _paint clips it - kept only where every room keeps a piece of
+        # its kind's least floor inside the walls that _mend_fragments will
+        # not fold away as a sliver, or the bathroom is the first to go.
         if not rooms and mask is not None:
             rooms = split_by_targets(box, kinds, rng, None, edge)
             if rooms and any(
-                    sum(mask[y][x] for y in range(r.y0, r.y1 + 1)
-                        for x in range(r.x0, r.x1 + 1)) < SIZES[r.kind].lo
-                    for r in rooms):
+                    len(p) < SIZES[r.kind].lo or _too_small(p)
+                    for r in rooms for p in [_kept_piece(r, mask)]):
                 rooms = None
         if rooms:
             return rooms
@@ -1181,6 +1181,26 @@ def _assign_flat_kinds(plan: Plan, hotel: bool = False,
             kinds = base[:-1] + extra + base[-1:]
         for i, kind in zip(ordered, kinds):
             plan.rooms[i - 1].kind = kind
+
+
+def _flats_keep_bathrooms(plan: Plan) -> None:
+    """Give a bathroom back to any flat of two rooms or more that lost it.
+
+    A bathroom cut to its kind is 3x3: a lift shaft landing on it, or a notch
+    in the footprint parting it from its flat, leaves a sliver folded into
+    the room next door or a piece handed to the neighbouring flat. The
+    smallest room that is not the living room - a kitchen last - takes over.
+    """
+    units: dict[int, list[Room]] = {}
+    for room in plan.rooms:
+        if room.unit and not room.is_shaft:
+            units.setdefault(room.unit, []).append(room)
+    for rooms in units.values():
+        if len(rooms) < 2 or any(r.kind == "bathroom" for r in rooms):
+            continue
+        spare = [r for r in rooms if r.kind not in ("livingroom", "openplan")]
+        if spare:
+            min(spare, key=lambda r: (r.kind == "kitchen", r.area)).kind = "bathroom"
 
 
 def _graph_distance(adj: dict[int, dict[int, int]], start: int) -> dict[int, int]:
@@ -2296,6 +2316,46 @@ SLIVER = 10
 SLIVER_THICKNESS = 2
 
 
+def _too_small(cells, drawn: bool = False) -> bool:
+    """Whether a piece of room is a sliver _mend_fragments folds away."""
+    if len(cells) < 4:
+        return True
+    if drawn:
+        # Hand-drawn: a strip two tiles thick is a corridor if that is
+        # what it was drawn as. Folding those into the room next door ate
+        # rooms people had just drawn - draw a room, draw another over
+        # part of it, and what was left of the first became part of the
+        # second, under a name they never picked.
+        return False
+    xs = {x for x, _ in cells}
+    ys = {y for _, y in cells}
+    # A whole rectangle of 3x3 or more is a real room - a small bathroom
+    # is exactly that. Only the ragged wedges a diagonal wall leaves go.
+    if len(cells) == len(xs) * len(ys) and min(len(xs), len(ys)) >= 3:
+        return False
+    return len(cells) < SLIVER or (min(len(xs), len(ys)) <= SLIVER_THICKNESS
+                                   and len(cells) < 3 * SLIVER)
+
+
+def _kept_piece(room: Room, mask: list[list[bool]]) -> set[tuple[int, int]]:
+    """The biggest connected piece of a room left inside the footprint."""
+    cells = {(x, y) for y in range(room.y0, room.y1 + 1)
+             for x in range(room.x0, room.x1 + 1) if mask[y][x]}
+    best: set[tuple[int, int]] = set()
+    while cells:
+        stack = [cells.pop()]
+        piece = set(stack)
+        while stack:
+            x, y = stack.pop()
+            for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if n in cells:
+                    cells.remove(n)
+                    piece.add(n)
+                    stack.append(n)
+        best = max(best, piece, key=len)
+    return best
+
+
 def _mend_fragments(plan: Plan) -> None:
     """Split rooms that were cut in two, and fold slivers into a neighbour.
 
@@ -2332,23 +2392,7 @@ def _mend_fragments(plan: Plan) -> None:
                 plan.grid[y][x] = new
 
     def too_small(cells) -> bool:
-        if len(cells) < 4:
-            return True
-        if plan.drawn:
-            # Hand-drawn: a strip two tiles thick is a corridor if that is
-            # what it was drawn as. Folding those into the room next door ate
-            # rooms people had just drawn - draw a room, draw another over
-            # part of it, and what was left of the first became part of the
-            # second, under a name they never picked.
-            return False
-        xs = {x for x, _ in cells}
-        ys = {y for _, y in cells}
-        # A whole rectangle of 3x3 or more is a real room - a small bathroom
-        # is exactly that. Only the ragged wedges a diagonal wall leaves go.
-        if len(cells) == len(xs) * len(ys) and min(len(xs), len(ys)) >= 3:
-            return False
-        return len(cells) < SLIVER or (min(len(xs), len(ys)) <= SLIVER_THICKNESS
-                                       and len(cells) < 3 * SLIVER)
+        return _too_small(cells, plan.drawn)
 
     for idx in range(1, len(plan.rooms) + 1):
         if plan.rooms[idx - 1].is_core or plan.rooms[idx - 1].is_shaft:
@@ -5612,6 +5656,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
     # now the kind is known, before any door is placed on them.
     _split_to_size(plan, rng)
     _cut_off_by_the_shaft(plan)
+    if kind == "apartment" and not hotel and tower is None:
+        _flats_keep_bathrooms(plan)
 
     _doors(plan, rng)
     if ground and tower is not None:
