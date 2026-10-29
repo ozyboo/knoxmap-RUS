@@ -10,6 +10,10 @@
   32 levels above ground and the roof takes the last one.
 - **No overlap warning on standalone maps**. Standalone maps no longer warn
   about overlaps.
+- **Room sizes follow room type** (`knoxbuild/sizing.py`, `knoxbuild/layout.py`). Houses and
+  flats pick their rooms first and cut the floor to each room's size, so a bathroom is no
+  longer the size of a bedroom or a living room. Floors it cannot cut this way (small or
+  irregular footprints) keep the old layout.
 
 ## 1.7.6.4
 

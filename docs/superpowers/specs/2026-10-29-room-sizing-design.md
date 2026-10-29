@@ -41,3 +41,10 @@ Sizes and room mix vary from home to home.
   fallback when the box is too small.
 - Existing walkability/layout tests and `tools/selftest.py` pass.
 - Re-run the 150+150 measurement and report the before/after medians.
+
+## Result (150 houses + 150 flat blocks, median tiles)
+- Flats, before -> after: bathroom 15 -> 12, bedroom 16 -> 16, kitchen 20 -> 12, living 24 -> 20, hall 20 -> 9, openplan 28 -> 27.
+- Houses, before -> after: bathroom 9 -> 12, bedroom 20 -> 28, living 30 -> 35, hall 21 -> 12, laundry 16 -> 12, storage 16 -> 12, office 16 -> 18; bathroom/living 0.30 -> 0.34.
+- Flat bathrooms stay at 12: corridor flats are only 3-5 tiles deep, so a bathroom is 3x4 or 3x5. Deeper flats are out of scope.
+- Fallback to the old splitter: rectangles 0%; masked houses 0%; masked flats about 44%.
+- Furniture still gets deleted to clear doors: 5.6 pieces per house and 26 per flat block (project 2).
