@@ -261,5 +261,67 @@ class Flats(unittest.TestCase):
                          "645f44026bd40753b1a9617d47707c825d032fcad4d5dcd8e5c06d35c518e3c9")
 
 
+
+def _houses(n=100):
+    """n houses of one to three storeys, as tools' measure.py builds them."""
+    from knoxbuild import layout as L
+    rng = random.Random(7)
+    for i in range(n):
+        w, h = rng.randint(9, 20), rng.randint(8, 16)
+        yield L.build_building(w, h, levels=rng.randint(1, 3), kind="house", seed=i)
+
+
+def _has_kitchen(kinds):
+    return "kitchen" in kinds or "openplan" in kinds
+
+
+class Houses(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.houses = list(_houses())
+
+    def test_medians(self):
+        import statistics as st
+        area: dict[str, list[int]] = {}
+        for b in self.houses:
+            for s in b.storeys:
+                for r in s.rooms:
+                    if not r.is_core and not r.is_shaft:
+                        area.setdefault(r.kind, []).append(r.area)
+        m = {k: st.median(v) for k, v in area.items()}
+        self.assertLessEqual(m["hall"], m["bedroom"], m)
+        self.assertLess(m["laundry"], m["bedroom"], m)
+        self.assertLess(m["storage"], m["bedroom"], m)
+        self.assertLess(m["bathroom"], m["bedroom"], m)
+        self.assertLess(m["bedroom"], m["livingroom"], m)
+
+    def test_every_house_has_the_basics(self):
+        for n, b in enumerate(self.houses):
+            kinds = {r.kind for s in b.storeys for r in s.rooms}
+            self.assertTrue(_has_kitchen(kinds), (n, kinds))
+            self.assertIn("bathroom", kinds, n)
+            self.assertTrue(kinds & set(BEDS), (n, kinds))
+
+    def test_small_house(self):
+        from knoxbuild import layout as L
+        for seed in range(10):
+            b = L.build_building(8, 10, levels=1, kind="house", seed=seed)
+            kinds = {r.kind for r in b.storeys[0].rooms}
+            self.assertTrue(_has_kitchen(kinds), (seed, kinds))
+            self.assertIn("bathroom", kinds, seed)
+            self.assertTrue(kinds & set(BEDS), (seed, kinds))
+
+    def test_bathroom_on_every_bedroom_floor(self):
+        from knoxbuild import layout as L
+        rng = random.Random(3)
+        for seed in range(20):
+            w, h = rng.randint(9, 20), rng.randint(8, 16)
+            b = L.build_building(w, h, levels=3, kind="house", seed=seed)
+            self.assertEqual(len(b.storeys), 3)
+            for lvl, s in enumerate(b.storeys):
+                kinds = {r.kind for r in s.rooms}
+                if kinds & set(BEDS):
+                    self.assertIn("bathroom", kinds, (seed, w, h, lvl, kinds))
+
 if __name__ == "__main__":
     unittest.main()
