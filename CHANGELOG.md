@@ -14,6 +14,11 @@
   flats pick their rooms first and cut the floor to each room's size, so a bathroom is no
   longer the size of a bedroom or a living room. Floors it cannot cut this way (small or
   irregular footprints) keep the old layout.
+- **Every building is rebuilt once**. The building cache is keyed on the layout sources, so
+  the first build after updating lays out every building again.
+- **No more cabinets over nothing**. A wall cabinet or microwave above a counter that was
+  removed to clear a doorway is removed with it. This also affects shops, offices and other
+  non-home buildings, and buildings laid out by the room solver.
 
 ## 1.7.6.4
 

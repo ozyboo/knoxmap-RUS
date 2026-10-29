@@ -42,9 +42,23 @@ Sizes and room mix vary from home to home.
 - Existing walkability/layout tests and `tools/selftest.py` pass.
 - Re-run the 150+150 measurement and report the before/after medians.
 
-## Result (150 houses + 150 flat blocks, median tiles)
-- Flats, before -> after: bathroom 15 -> 12, bedroom 16 -> 16, kitchen 20 -> 12, living 24 -> 20, hall 20 -> 9, openplan 28 -> 27.
-- Houses, before -> after: bathroom 9 -> 12, bedroom 20 -> 28, living 30 -> 35, hall 21 -> 12, laundry 16 -> 12, storage 16 -> 12, office 16 -> 18; bathroom/living 0.30 -> 0.34.
+## Result (median tiles; before = 7a72969)
+- Flats (150 blocks, measure.py), before -> after: bathroom 15 -> 12, bedroom 16 -> 16, kitchen 20 -> 12,
+  living 24 -> 20, hall 20 -> 9, openplan 28 -> 27.
+- Rectangular houses (150, measure.py): bathroom 9 -> 12, bedroom 20 -> 25, living 30 -> 32, kitchen 21 -> 20,
+  hall 21 -> 12, laundry 16 -> 12, storage 16 -> 12, office 16 -> 16; separate dining rooms in fewer than
+  20 of 150 houses.
+- Turned houses (150, audit_layouts.rotated_mask): unchanged from before (bathroom 12, living 42, bedroom
+  27 -> 30): a footprint filling under 80% of its box keeps the old splitter, since a cut drawn on the
+  box made every unclipped room about twice its size (living median 99, max 528).
+- Big rectangles (150, 20-32 x 16-24): bathroom 9 -> 10, bedroom 21 -> 24, living 36 -> 36, kitchen 25 -> 20.
+  A big floor gets more rooms (one per 14 tiles, up to 40 spares), not bigger ones, and a cut whose
+  room comes out over 1.5 x its kind's largest size is not kept.
+- Circulation (300 mixed houses): the hall is cut beside the stairs and spare rooms off it become halls
+  where bedrooms would chain; upper stair cores opening only into bedrooms/bathrooms 2 -> 12,
+  bedroom-to-bedroom doors 38 -> 55, bedroom-to-bathroom 49 -> 57.
 - Flat bathrooms stay at 12: corridor flats are only 3-5 tiles deep, so a bathroom is 3x4 or 3x5. Deeper flats are out of scope.
-- Fallback to the old splitter: rectangles 0%; masked houses 0%; masked flats about 44%.
-- Furniture still gets deleted to clear doors: 5.6 pieces per house and 26 per flat block (project 2).
+- Fallback to the old splitter (floors): rectangular houses 5%, big rectangles 8%, irregular
+  (notched) houses 36%, turned houses all; masked flats about 44%.
+- Speed: 300 mixed houses 9.9 s -> 11.6 s; big rectangles 12 s -> 25 s (twice the rooms, cut by kind).
+- Furniture still gets deleted to clear doors: 6.7 pieces per house (was 5.3) and 26 per flat block (project 2).
