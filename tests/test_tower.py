@@ -164,5 +164,55 @@ class TowerFloor(unittest.TestCase):
             self.assertTrue(lobbies)
             self.assertIn(lobbies[0], lift_lobby(plan, links))
 
+
+def lift_rects(storey):
+    return sorted(r for r, _ in storey.shafts)
+
+
+class BuildBuildingTower(unittest.TestCase):
+    def test_a_32_storey_tower_builds(self):
+        b = layout.build_building(30, 40, levels=32, kind="civic", seed=3)
+        self.assertEqual(len(b.storeys), 32)
+        first = lift_rects(b.storeys[0])
+        self.assertGreaterEqual(len(first), 2)
+        for s in b.storeys:
+            self.assertEqual(lift_rects(s), first)
+            self.assertEqual(sorted((x, y, d) for _, (x, y, d) in s.shafts),
+                             sorted((x, y, d) for _, (x, y, d) in b.storeys[0].shafts))
+        self.assertNotIn("office", {r.kind for r in b.storeys[29].rooms})
+        self.assertIn("office", {r.kind for r in b.storeys[5].rooms})
+        self.assertNotIn("retail", {r.kind for r in b.storeys[0].rooms})
+        self.assertIn("lobby", {r.kind for r in b.storeys[0].rooms})
+
+    def test_every_room_of_every_storey_is_reachable(self):
+        b = layout.build_building(30, 40, levels=14, kind="civic", seed=3)
+        for lvl, s in enumerate(b.storeys):
+            links = door_links(s)
+            start = next(i for i, r in enumerate(s.rooms, 1) if r.is_core)
+            seen, stack = {start}, [start]
+            while stack:
+                for n in links.get(stack.pop(), ()):
+                    if n and n not in seen:
+                        seen.add(n)
+                        stack.append(n)
+            for i, r in enumerate(s.rooms, 1):
+                if not r.is_shaft:
+                    self.assertIn(i, seen, (lvl, i, r.kind))
+
+    def test_setback_keeps_core_inside_upper_floors(self):
+        b = layout.build_building(30, 40, levels=12, kind="civic", seed=3)
+        upper = b.storeys[-1]
+        self.assertIsNotNone(upper.mask)
+        cores = [r for r in upper.rooms if r.is_core]
+        for rect in lift_rects(upper) + [(c.x0, c.y0, c.x1, c.y1) for c in cores]:
+            for x, y in cells(rect):
+                self.assertTrue(upper.mask[y][x], (x, y))
+
+    def test_a_footprint_with_no_room_for_a_core_falls_back(self):
+        mask = [[not (x >= 8 and y < 12) for x in range(20)] for y in range(20)]
+        b = layout.build_building(20, 20, levels=14, kind="civic", seed=1, mask=mask)
+        self.assertTrue(b.storeys)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5118,7 +5118,16 @@ def build_building(width: int, height: int, levels: int = 1,
     # else only needs a shaft, and only once there is a floor above.
     core = None
     corridor = False
-    if kind == "apartment":
+    # An office tower has its own core, the same on every storey (tower.py);
+    # a footprint with no room for one is laid out as any other building.
+    from . import tower as tower_mod
+    tcore = None
+    if tower_mod.qualifies(kind, levels, width, height):
+        tcore = tower_mod.pick_core(width, height, mask,
+                                    random.Random(seed ^ 0x70E2))
+    if tcore is not None:
+        core = tcore.stair
+    elif kind == "apartment":
         core = _pick_corridor(width, height, mask, rng)
         corridor = core is not None
     elif kind in NEEDS_CORRIDOR and (
@@ -5139,15 +5148,18 @@ def build_building(width: int, height: int, levels: int = 1,
 
     stairs = _stairs_in_core(core) if core is not None and levels > 1 else None
     shaft = shaft_door = None
-    if core is not None and levels >= ELEVATOR_FROM_LEVELS and min(width, height) >= ELEVATOR_MIN_SIDE:
+    if tcore is not None:
+        shaft, shaft_door = tcore.lifts[0]
+    elif core is not None and levels >= ELEVATOR_FROM_LEVELS and min(width, height) >= ELEVATOR_MIN_SIDE:
         found = _pick_shaft(core, width, height, mask, stairs)
         if found:
             shaft, shaft_door = found
-    upper_mask, setback_at = _setback(width, height, mask, levels, core, shaft,
+    lifts = [r for r, _ in tcore.lifts] if tcore is not None else [shaft]
+    upper_mask, setback_at = _setback(width, height, mask, levels, core, lifts,
                                       corridor)
     # Shops under flats where the town is dense, and wherever the map puts a
     # shop, a restaurant or a bank in a building that is more than one.
-    shops = kind in ("apartment", "civic") and core is not None and (
+    shops = tcore is None and kind in ("apartment", "civic") and core is not None and (
         (retail and kind == "apartment" and levels >= 3) or (bool(uses) and levels >= 2))
     # A block of flats repeats its floor plan. Looking up at one from the
     # street the windows line up all the way, because every floor above the
@@ -5173,6 +5185,9 @@ def build_building(width: int, height: int, levels: int = 1,
                    core=core, level=lvl, levels=levels, stairs=stairs,
                    corridor=corridor, shaft=shaft, shaft_door=shaft_door,
                    street=street, uses=uses, hotel=hotel,
+                   extra_shafts=tcore.lifts[1:] if tcore is not None else None,
+                   tower=tcore,
+                   plant=tcore is not None and lvl == tower_mod.plant_level(levels),
                    entrances=entrances if lvl == 0 else None,
                    profile=profile, mapped=mapped,
                    party={e for e, up in (party or {}).items() if lvl < up})
@@ -5206,7 +5221,7 @@ SETBACK_TILES = 2
 SETBACK_MIN_KEEP = 0.5        # the upper part keeps at least this much floor
 
 
-def _setback(width: int, height: int, mask, levels: int, core, shaft,
+def _setback(width: int, height: int, mask, levels: int, core, shafts,
              corridor: bool):
     """(the upper storeys' mask, the storey the step is at) or (None, 0)."""
     if levels < SETBACK_FROM_LEVELS or core is None:
@@ -5232,7 +5247,7 @@ def _setback(width: int, height: int, mask, levels: int, core, shaft,
         return True
 
     upper = [[base[y][x] and kept(x, y) for x in range(width)] for y in range(height)]
-    for rx0, ry0, rx1, ry1 in [core] + ([shaft] if shaft else []):
+    for rx0, ry0, rx1, ry1 in [core] + [r for r in shafts if r]:
         for y in range(ry0, ry1 + 1):
             for x in range(rx0, rx1 + 1):
                 if not upper[y][x]:
