@@ -89,7 +89,8 @@ def _path(cells, depth, sources, goal):
 
 def walkway(cells, entries):
     """Tiles that stay free: a path joining the room's ways in, or for a single
-    way in a spine to the farthest tile that is off every wall."""
+    way in a spine to the farthest tile that is off every wall, where the floor
+    off the walls is at least two tiles across."""
     terminals = sorted({e for e in entries if e in cells})
     if not terminals:
         return set()
@@ -104,7 +105,12 @@ def walkway(cells, entries):
                 if n in cells and n not in steps:
                     steps[n] = steps[t] + 1
                     todo.append(n)
-        inner = [t for t in steps if depth[t] >= 2]
+        inner = {t for t in steps if depth[t] >= 2}
+        # Only where the inner floor is two tiles across: a spine down the one
+        # inner row of a three-wide room left nothing two deep (a double bed)
+        # room on either side, and 117 of 176 such bedrooms lost their bed.
+        inner = [(x, y) for x, y in inner
+                 if {(x + 1, y), (x - 1, y)} & inner and {(x, y + 1), (x, y - 1)} & inner]
         if not inner:
             return {start}
         target = min(inner, key=lambda t: (-steps[t], t[1], t[0]))

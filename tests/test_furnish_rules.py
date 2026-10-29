@@ -1,4 +1,6 @@
+import random
 import unittest
+from unittest import mock
 
 from knoxbuild import catalog, layout
 from knoxbuild.furnish_rules import (
@@ -22,6 +24,28 @@ def connected(tiles):
                 seen.add(n)
                 todo.append(n)
     return seen == set(tiles)
+
+
+def _sample():
+    for kind in ("house", "apartment"):
+        for seed in range(30):
+            rng = random.Random(seed)
+            w = rng.randint(9, 20)
+            h = rng.randint(8, 16)
+            levels = rng.randint(1, 3) if kind == "house" else rng.randint(3, 5)
+            yield kind, seed, dict(width=w, height=h, levels=levels, kind=kind, seed=seed)
+
+
+# 30 houses + 30 flat blocks: (kind, seed, build_building kwargs).
+SAMPLE = list(_sample())
+
+
+def furnish_time_builds():
+    """SAMPLE as furnished: no windows (doors stay put), nothing cleared."""
+    with mock.patch.object(layout, "_place_windows", lambda *a, **k: None), \
+            mock.patch.object(layout, "_clear_the_way", lambda *a, **k: 0):
+        return [(kind, seed, layout.build_building(**args))
+                for kind, seed, args in SAMPLE]
 
 
 class PriorityTable(unittest.TestCase):
@@ -89,6 +113,11 @@ class Walkway(unittest.TestCase):
     def test_narrow_room_gets_only_the_door(self):
         self.assertEqual(walkway(rect(2, 6), [(0, 0)]), {(0, 0)})
 
+    def test_three_wide_room_gets_only_the_door(self):
+        # A spine down the one inner row leaves nothing two deep (a double
+        # bed) room on either side.
+        self.assertEqual(walkway(rect(3, 7), [(1, 0)]), {(1, 0)})
+
     def test_no_entries(self):
         self.assertEqual(walkway(rect(4, 4), []), set())
         self.assertEqual(walkway(rect(4, 4), [(9, 9)]), set())
@@ -123,6 +152,65 @@ class FloorStaysOpen(unittest.TestCase):
 
     def test_nothing_new(self):
         self.assertIs(keeps_floor_open(self.cells, set(), self.walk, set(), 2), True)
+
+
+
+class WalkwayIsKeptClear(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.builds = furnish_time_builds()
+
+    def rooms(self):
+        """(label, storey, idx, cells, entries, walk) for every room that is
+        neither core nor shaft."""
+        for kind, seed, b in self.builds:
+            stairs = b.stairs[0] if b.stairs else None
+            for level, s in enumerate(b.storeys):
+                doors = layout._door_tiles(s)
+                for idx, r in enumerate(s.rooms, 1):
+                    if r.is_core or r.is_shaft:
+                        continue
+                    cells = {(x, y) for y, row in enumerate(s.grid)
+                             for x, v in enumerate(row) if v == idx}
+                    entries = set()
+                    for x, y, d in list(s.doors) + sorted(s.open_edge):
+                        entries |= {(x, y), (x - 1, y) if d == "W" else (x, y - 1)}
+                    if stairs is not None:
+                        sx, sy, sd = stairs
+                        dx, dy = (0, 1) if sd == "N" else (1, 0)
+                        entries |= {(sx - dx, sy - dy),
+                                    (sx + dx * layout.STAIR_RUN, sy + dy * layout.STAIR_RUN)}
+                    walk = layout._room_walkway(s, idx, doors, stairs)
+                    yield ((kind, seed, level, r.kind), s, idx, cells,
+                           entries & cells, walk)
+
+    def test_no_blocking_piece_on_a_walkway(self):
+        for label, s, idx, _cells, _entries, walk in self.rooms():
+            for role, x, y, o in s.furniture:
+                if s.grid[y][x] != idx or not layout._blocks(role):
+                    continue
+                with self.subTest(label, role=role):
+                    self.assertFalse(set(layout._tiles_under(role, x, y, o)) & walk)
+
+    def test_walkway_joins_every_way_in(self):
+        for label, _s, _idx, _cells, entries, walk in self.rooms():
+            with self.subTest(label):
+                self.assertLessEqual(entries, walk)
+                if entries:
+                    self.assertTrue(connected(walk))
+
+    def test_bedrooms_keep_their_beds(self):
+        # Before the walkway 293 of 347 bedrooms had a bed at furnish time.
+        rooms = beds = 0
+        for _kind, _seed, b in self.builds:
+            for s in b.storeys:
+                for idx, r in enumerate(s.rooms, 1):
+                    if r.kind != "bedroom":
+                        continue
+                    rooms += 1
+                    beds += any(role.startswith(("bed", "double_bed"))
+                                for role, x, y, _o in s.furniture if s.grid[y][x] == idx)
+        self.assertGreaterEqual(beds / rooms, 0.80)
 
 
 if __name__ == "__main__":

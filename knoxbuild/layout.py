@@ -19,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from . import catalog as C
+from . import furnish_rules as FR
 from .uses import FRONT_ROOMS
 from .settings import Settings
 from .sizing import (SIZES, capacity, min_area, programme_for_flat,
@@ -4251,6 +4252,56 @@ def _bath_mat_spot(plan: Plan, idx: int, room: Room,
     return ax, ay, mat_orient, cells
 
 
+def _door_tiles(plan: Plan) -> set[tuple[int, int]]:
+    """Tiles every way in keeps clear, DOOR_CLEAR_DEPTH deep either side."""
+    door_tiles: set[tuple[int, int]] = set()
+    # An opened shopfront is a way in just as much as a door, so it gets a
+    # door's clearance. The game's mall keeps its openings empty; ours had a
+    # shelf or a chiller across 64% of them, which is no way into a shop.
+    ways_in = list(plan.doors) + sorted(plan.open_edge)
+    for x, y, d in ways_in:
+        # Two tiles deep either side: one clear tile in front of a door still
+        # had a fridge or a bookcase on the next, and nobody could step past.
+        for k in range(DOOR_CLEAR_DEPTH):
+            door_tiles.add((x + k, y) if d == "W" else (x, y + k))
+            door_tiles.add((x - 1 - k, y) if d == "W" else (x, y - 1 - k))
+    return door_tiles
+
+
+def _room_walkway(plan: Plan, idx: int, door_tiles: set,
+                  stairs: tuple[int, int, str] | None) -> set[tuple[int, int]]:
+    """Tiles of room idx nothing standing may cover: a path joining its ways
+    in (doors, opened shopfronts, the stair landings), or a spine from its one
+    way in, plus the door clearance that touches it. Empty for the core or a
+    lift shaft, which take nothing standing anyway.
+
+    Clearance that does not touch the path is left out: the second tile in
+    front of a door across a one-tile hall lands in the room beyond, cut off
+    from its walkway. door_tiles keeps it clear all the same."""
+    r = plan.rooms[idx - 1]
+    if r.is_core or r.is_shaft:
+        return set()
+    cells = {(x, y) for y in range(r.y0, r.y1 + 1) for x in range(r.x0, r.x1 + 1)
+             if plan.grid[y][x] == idx}
+    entries = []
+    for x, y, d in list(plan.doors) + sorted(plan.open_edge):
+        entries += [(x, y), (x - 1, y) if d == "W" else (x, y - 1)]
+    if stairs is not None:
+        sx, sy, sd = stairs
+        dx, dy = (0, 1) if sd == "N" else (1, 0)
+        entries += [(sx - dx, sy - dy), (sx + dx * STAIR_RUN, sy + dy * STAIR_RUN)]
+    walk = FR.walkway(cells, entries)
+    clear = door_tiles & cells
+    todo = sorted(walk)
+    while todo:
+        x, y = todo.pop()
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if n in clear and n not in walk:
+                walk.add(n)
+                todo.append(n)
+    return walk
+
+
 def _furnish(plan: Plan, rng: random.Random,
              stairs: tuple[int, int, str] | None = None,
              street: str | None = None) -> None:
@@ -4262,22 +4313,12 @@ def _furnish(plan: Plan, rng: random.Random,
     so many rooms were pitch dark: the switch was only on some rooms'
     wishlists, and even there it was written to the floor rather than a wall.
     """
-    door_tiles: set[tuple[int, int]] = set()
-    # An opened shopfront is a way in just as much as a door, so it gets a
-    # door's clearance. The game's mall keeps its openings empty; ours had a
-    # shelf or a chiller across 64% of them, which is no way into a shop.
-    ways_in = list(plan.doors) + sorted(plan.open_edge)
+    door_tiles = _door_tiles(plan)
     door_edges = set(plan.doors) | set(plan.open_edge)
     # The lift doors take their stretch of wall: nothing hangs on it.
     for _rect, (lx, ly, ld) in plan.shafts:
         door_edges |= {(lx, ly + i, "W") if ld == "W" else (lx + i, ly, "N")
                        for i in range(SHAFT_SIZE)}
-    for x, y, d in ways_in:
-        # Two tiles deep either side: one clear tile in front of a door still
-        # had a fridge or a bookcase on the next, and nobody could step past.
-        for k in range(DOOR_CLEAR_DEPTH):
-            door_tiles.add((x + k, y) if d == "W" else (x, y + k))
-            door_tiles.add((x - 1 - k, y) if d == "W" else (x, y - 1 - k))
     # Tiles of the flight. A switch hung there would be deleted along with the
     # furniture cleared off the staircase, leaving the stair hall dark.
     stair_tiles: set[tuple[int, int]] = set()
@@ -4374,7 +4415,13 @@ def _furnish(plan: Plan, rng: random.Random,
                 if hang(SWITCH, x, y, facing):
                     break
 
-        keep_clear = door_tiles | stair_tiles
+        # The walkway: a path joining this room's ways in, or a spine from its
+        # one door, that nothing standing may cover. Placed round it rather
+        # than cleared afterwards, which deleted toilets and beds along with
+        # the plants.
+        walk = _room_walkway(plan, idx, door_tiles, stairs)
+        keep_clear = door_tiles | stair_tiles | walk
+        no_go = door_tiles | walk
         # Nothing standing goes in the stair hall or corridor: a flat's front
         # door and the only way past the flight both run through it, and one
         # bookcase beside the stairs closes the corridor.
@@ -4422,7 +4469,7 @@ def _furnish(plan: Plan, rng: random.Random,
         # A shop's sales floor is fitted out as a whole - rows of shelving,
         # the till by the door - not from a list pushed against its walls.
         if r.kind in interiors.STORES and interiors.furnish_store(
-                plan, idx, r, rng, door_tiles, stair_tiles, street):
+                plan, idx, r, rng, door_tiles, stair_tiles | walk, street):
             continue
         pal = palettes.get(r.unit)
         if pal is None:
@@ -4440,8 +4487,8 @@ def _furnish(plan: Plan, rng: random.Random,
         if office:
             base = interiors.furnish_office(plan, idx, r, rng, occupied, keep_clear)
         elif eatery:
-            base = interiors.furnish_dining(plan, idx, r, rng, occupied, stair_tiles,
-                                            door_tiles, street)
+            base = interiors.furnish_dining(plan, idx, r, rng, occupied,
+                                            stair_tiles | walk, door_tiles, street)
         elif commercial_kitchen:
             base = interiors.KITCHEN_KIT.get(r.kind, interiors.DEFAULT_KITCHEN_KIT)
         elif r.kind == "bathroom":
@@ -4570,7 +4617,7 @@ def _furnish(plan: Plan, rng: random.Random,
         if r.kind in ("bedroom", "kidsbedroom"):
             bed = next((role for role in wishlist if role in (pal.get("double_bed"), pal.get("bed"))
                         or role.startswith(("double_bed", "bed"))), None)
-            if bed and interiors.bed_against_wall(plan, idx, r, slots, occupied, door_tiles,
+            if bed and interiors.bed_against_wall(plan, idx, r, slots, occupied, no_go,
                                                   bed, "sidetable"):
                 wishlist.remove(bed)
                 if "sidetable" in wishlist:
@@ -4601,7 +4648,8 @@ def _furnish(plan: Plan, rng: random.Random,
         floor_slots = sorted(slots, key=slot_order)
         for role in wishlist:
             if role == "bath_mat":
-                mat = _bath_mat_spot(plan, idx, r, occupied, keep_clear)
+                # A mat is walked over, so it may lie on the walkway.
+                mat = _bath_mat_spot(plan, idx, r, occupied, door_tiles | stair_tiles)
                 if mat is not None:
                     mx, my, mat_orient, mat_cells = mat
                     plan.furniture.append((role, mx, my, mat_orient))
@@ -4639,7 +4687,7 @@ def _furnish(plan: Plan, rng: random.Random,
                 orient = _facing(role, wanted)
                 ax, ay = _wall_anchor(role, x, y, orient, wanted)
                 cells = _cells_for(role, ax, ay, orient)
-                if any(c in occupied or c in door_tiles for c in cells):
+                if any(c in occupied or c in no_go for c in cells):
                     continue
                 if any(_room_at(plan, cx, cy) != idx for cx, cy in cells):
                     continue
@@ -4659,10 +4707,10 @@ def _furnish(plan: Plan, rng: random.Random,
         if commercial_kitchen:
             # Steel counters, and no wall cupboards or microwave. A working
             # kitchen really is worktop wall to wall, so it keeps no budget.
-            _counter_runs(plan, idx, slots, occupied, door_tiles, stair_tiles,
+            _counter_runs(plan, idx, slots, occupied, no_go, stair_tiles,
                           "counter_2", cabinets=False)
         elif r.kind in KITCHENS:
-            _counter_runs(plan, idx, slots, occupied, door_tiles, stair_tiles,
+            _counter_runs(plan, idx, slots, occupied, no_go, stair_tiles,
                           pal.get("counter", "counter"), area=r.area, rng=rng)
         _stand_on_something(plan, idx, r, pal)
 
