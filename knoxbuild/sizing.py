@@ -2,7 +2,7 @@
 
 Sizes come from the "kinds" table in room_solver.json (square metres), so the
 two room models agree. Programmes are lists of Build room kinds, living room
-first; split_by_targets (Task 2) cuts a box in proportion to their targets.
+first; split_by_targets cuts a box in proportion to their targets.
 """
 import json
 import os
@@ -96,3 +96,101 @@ def programme_for_house_floor(area: int, level: int, levels: int,
         if area >= max(a, min_area(rooms + [k])):
             rooms.append(k)
     return rooms
+
+
+def split_by_targets(box: tuple[int, int, int, int], kinds: list[str],
+                     rng: random.Random, mask: list[list[bool]] | None = None,
+                     first_edge: str | None = None) -> list | None:
+    """Cut box (x0, y0, x1, y1, inclusive) into one room per kind, sized by target.
+
+    Recursive guillotine: kinds (first kept first, the rest shuffled by rng)
+    split into two groups, a cut along the longer axis at the ratio of the
+    groups' target areas, then each side again. Targets are shares, so they
+    scale to the box. Every side stays >= MIN_ROOM; None when no cut allows it.
+    first_edge ("N" = y0, "S" = y1, "W" = x0, "E" = x1) makes the first kind's
+    room touch that edge of the box. With a mask every room lies wholly inside
+    it and the rooms cover exactly the box's masked tiles: a cut is kept only
+    where each piece, trimmed to its masked bounding box, ends up as whole
+    rectangles - a footprint no guillotine cut can carve gives None (fall back).
+    Rooms come back in kinds order, kind set, fixed=True.
+    """
+    from .layout import MIN_ROOM as M, Room
+    if not kinds:
+        return None
+    t = [SIZES[k].target for k in kinds]
+    order = [0] + rng.sample(range(1, len(kinds)), len(kinds) - 1)
+    side = {"W": 0, "N": 1, "E": 2, "S": 3}.get(first_edge)
+    # ponytail: node cap, backtracking only happens on masked boxes; a mask
+    # that needs deeper search falls back instead of stalling the build.
+    budget = [400]
+
+    # Masked tiles of any rectangle in O(1): sums over (0, 0)..(x - 1, y - 1).
+    pre = None
+    if mask is not None:
+        pre = [[0] * (box[2] + 2) for _ in range(box[3] + 2)]
+        for y in range(box[3] + 1):
+            for x in range(box[2] + 1):
+                pre[y + 1][x + 1] = (mask[y][x] + pre[y][x + 1] + pre[y + 1][x]
+                                     - pre[y][x])
+
+    def tiles(r):
+        x0, y0, x1, y1 = r
+        if pre is None:
+            return (x1 - x0 + 1) * (y1 - y0 + 1)
+        return pre[y1 + 1][x1 + 1] - pre[y0][x1 + 1] - pre[y1 + 1][x0] + pre[y0][x0]
+
+    def trim(r):
+        if pre is None:
+            return r
+        x0, y0, x1, y1 = r
+        ys = [y for y in range(y0, y1 + 1) if tiles((x0, y, x1, y))]
+        xs = [x for x in range(x0, x1 + 1) if tiles((x, y0, x, y1))]
+        return (xs[0], ys[0], xs[-1], ys[-1]) if ys else None
+
+    def fits(r, idx):
+        w, h = r[2] - r[0] + 1, r[3] - r[1] + 1
+        if side is not None and 0 in idx and r[side] != box[side]:
+            return False
+        return (w // M) * (h // M) >= len(idx) and tiles(r) >= len(idx) * M * M
+
+    def solve(r, idx):
+        budget[0] -= 1
+        if budget[0] < 0:
+            return None
+        w, h = r[2] - r[0] + 1, r[3] - r[1] + 1
+        if len(idx) == 1:
+            return [(idx[0], r)] if tiles(r) == w * h else None
+        whole, total = tiles(r), sum(t[i] for i in idx)
+        cands = []
+        for k in range(1, len(idx)):
+            a, b = idx[:k], idx[k:]
+            share = sum(t[i] for i in a) / total
+            for vertical in (True, False):
+                lo, hi = (r[0], r[2]) if vertical else (r[1], r[3])
+                for p in range(lo + M, hi - M + 2):
+                    low = (r[0], r[1], p - 1, r[3]) if vertical else (r[0], r[1], r[2], p - 1)
+                    high = (p, r[1], r[2], r[3]) if vertical else (r[0], p, r[2], r[3])
+                    got = tiles(low) / whole
+                    low, high = trim(low), trim(high)
+                    if low is None or high is None:
+                        continue
+                    longer = vertical == (w >= h)
+                    for g_lo, g_hi, want in ((a, b, share), (b, a, 1 - share)):
+                        if fits(low, g_lo) and fits(high, g_hi):
+                            cands.append((not longer, abs(got - want), rng.random(),
+                                          low, g_lo, high, g_hi))
+        cands.sort(key=lambda c: c[:3])
+        for *_, low, g_lo, high, g_hi in cands:
+            one = solve(low, g_lo)
+            two = one and solve(high, g_hi)
+            if two:
+                return one + two
+            if budget[0] < 0:
+                return None
+        return None
+
+    start = trim(box)
+    got = start and fits(start, order) and solve(start, order)
+    if not got:
+        return None
+    return [Room(*r, kind=kinds[i], fixed=True) for i, r in sorted(got)]

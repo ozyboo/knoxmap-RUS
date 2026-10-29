@@ -86,5 +86,66 @@ class Programmes(unittest.TestCase):
         self.assertTrue({"kitchen", "bedroom", "bathroom"} <= set(one))
 
 
+FLAT = ["livingroom", "kitchen", "bedroom", "bathroom"]
+
+
+def _tiles(r):
+    return {(x, y) for x in range(r.x0, r.x1 + 1) for y in range(r.y0, r.y1 + 1)}
+
+
+class Split(unittest.TestCase):
+    def assertTiles(self, rooms, want):
+        got = [t for r in rooms for t in _tiles(r)]
+        self.assertEqual(len(got), len(set(got)))       # no overlap
+        self.assertEqual(set(got), want)                # full coverage
+
+    def test_tiles_box(self):
+        box = {(x, y) for x in range(12) for y in range(10)}
+        ordered = 0
+        for seed in range(50):
+            rooms = S.split_by_targets((0, 0, 11, 9), FLAT, random.Random(seed))
+            self.assertIsNotNone(rooms, seed)
+            self.assertEqual([r.kind for r in rooms], FLAT)
+            self.assertTrue(all(r.fixed for r in rooms))
+            self.assertTrue(all(min(r.w, r.h) >= 3 for r in rooms))
+            self.assertTiles(rooms, box)
+            a = {r.kind: r.area for r in rooms}
+            ordered += a["bathroom"] < a["bedroom"] < a["livingroom"]
+        self.assertGreaterEqual(ordered, 45)
+
+    def test_too_small(self):
+        self.assertIsNone(S.split_by_targets((0, 0, 4, 3), FLAT, random.Random(0)))
+
+    def test_deterministic(self):
+        a = S.split_by_targets((2, 3, 15, 12), FLAT, random.Random(9))
+        self.assertEqual(a, S.split_by_targets((2, 3, 15, 12), FLAT, random.Random(9)))
+
+    def test_first_edge(self):
+        x0, y0, x1, y1 = box = (1, 2, 13, 11)
+        on = {"N": lambda r: r.y0 == y0, "S": lambda r: r.y1 == y1,
+              "W": lambda r: r.x0 == x0, "E": lambda r: r.x1 == x1}
+        for edge, touches in on.items():
+            for seed in range(20):
+                rooms = S.split_by_targets(box, FLAT, random.Random(seed), first_edge=edge)
+                self.assertIsNotNone(rooms, (edge, seed))
+                self.assertEqual(rooms[0].kind, "livingroom")
+                self.assertTrue(touches(rooms[0]), (edge, seed, rooms[0]))
+
+    def test_masked_l(self):
+        # 12x10 box with the north-east 5x4 corner outside the building.
+        mask = [[not (x >= 7 and y < 4) for x in range(12)] for y in range(10)]
+        inside = {(x, y) for y in range(10) for x in range(12) if mask[y][x]}
+        for seed in range(20):
+            rooms = S.split_by_targets((0, 0, 11, 9), FLAT, random.Random(seed), mask)
+            self.assertIsNotNone(rooms, seed)
+            self.assertTiles(rooms, inside)
+            self.assertTrue(all(min(r.w, r.h) >= 3 for r in rooms))
+
+    def test_mask_hole_none(self):
+        # One tile missing mid-floor: no room may hold it, nothing can cut it out.
+        mask = [[(x, y) != (5, 5) for x in range(12)] for y in range(10)]
+        self.assertIsNone(S.split_by_targets((0, 0, 11, 9), FLAT, random.Random(0), mask))
+
+
 if __name__ == "__main__":
     unittest.main()
