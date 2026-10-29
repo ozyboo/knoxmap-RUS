@@ -342,7 +342,8 @@ class Houses(unittest.TestCase):
         self.assertLess(m["bedroom"], m["livingroom"], m)
         # A bathroom is not sized like a living room.
         self.assertLessEqual(m["bathroom"], 0.4 * m["livingroom"], m)
-        self.assertLessEqual(m["bathroom"], 0.45 * m["bedroom"], m)
+        # Bedrooms are near their old 20 again, a bathroom 3x4 at most.
+        self.assertLessEqual(m["bathroom"], 0.5 * m["bedroom"], m)
         self.assertLessEqual(m["bathroom"], 12, m)
 
     def test_every_house_has_the_basics(self):
@@ -373,6 +374,50 @@ class Houses(unittest.TestCase):
                 if kinds & set(BEDS):
                     self.assertIn("bathroom", kinds, (seed, w, h, lvl, kinds))
 
+    def test_upstairs_opens_onto_a_hall(self):
+        # The stairs arrive in a hall, not straight into a bedroom.
+        cores = bad = bed_bed = 0
+        for b in self.houses:
+            for n, s in enumerate(b.storeys):
+                for a, c in _door_pairs(s):
+                    ka, kc = s.rooms[a - 1].kind, s.rooms[c - 1].kind
+                    bed_bed += ka in BEDS and kc in BEDS
+                if not n:
+                    continue
+                for i, r in enumerate(s.rooms, 1):
+                    if not r.is_core:
+                        continue
+                    opened = [s.rooms[j - 1] for p in _door_pairs(s) if i in p
+                              for j in p if j != i and not s.rooms[j - 1].is_core]
+                    cores += 1
+                    bad += bool(opened) and all(o.kind in BEDS + ("bathroom",)
+                                                for o in opened)
+        self.assertLessEqual(bad, 0.07 * cores, (bad, cores))
+        self.assertLessEqual(bed_bed, 0.2 * len(self.houses), bed_bed)
+
+    def test_dining_room_is_the_exception(self):
+        dining = sum(any(r.kind == "dining" for s in b.storeys for r in s.rooms)
+                     for b in self.houses)
+        self.assertLessEqual(dining, 0.25 * len(self.houses), dining)
+
+    def test_some_ground_floors_keep_a_bedroom(self):
+        two = [b for b in self.houses if len(b.storeys) == 2]
+        ground = sum(any(r.kind in BEDS for r in b.storeys[0].rooms) for b in two)
+        self.assertGreater(ground, 0)
+        self.assertLessEqual(ground, 0.4 * len(two), (ground, len(two)))
+
+
+def _door_pairs(plan):
+    """(room, room) for every door between two rooms of a storey."""
+    out = []
+    for x, y, d in plan.doors:
+        a = (plan.grid[y][x - 1] if x > 0 else 0) if d == "W" else (
+            plan.grid[y - 1][x] if y > 0 else 0)
+        c = plan.grid[y][x] if x < plan.width and y < plan.height else 0
+        if a and c:
+            out.append((a, c))
+    return out
+
 
 def _audit_masks():
     import os
@@ -381,6 +426,51 @@ def _audit_masks():
         os.path.abspath(__file__))), "tools"))
     from audit_layouts import irregular_mask, rotated_mask
     return irregular_mask, rotated_mask
+
+
+class OddHouses(unittest.TestCase):
+    """Turned footprints and big rectangles, where a cut sized for the floor
+    but drawn on the whole box made every room twice its size."""
+
+    @classmethod
+    def setUpClass(cls):
+        from knoxbuild import layout as L
+        _, rotated_mask = _audit_masks()
+        rng = random.Random(5)
+        cls.turned, cls.big = [], []
+        for i in range(60):
+            fp = rotated_mask(rng)
+            cls.turned.append(L.build_building(
+                fp.width, fp.height, levels=rng.randint(1, 3), kind="house",
+                seed=i, mask=fp.mask_list()))
+        for i in range(40):
+            w, h = rng.randint(20, 32), rng.randint(16, 24)
+            cls.big.append(L.build_building(w, h, levels=rng.randint(1, 3),
+                                            kind="house", seed=i))
+
+    @staticmethod
+    def _areas(houses):
+        area: dict[str, list[int]] = {}
+        for b in houses:
+            for s in b.storeys:
+                for r in s.rooms:
+                    if not r.is_core and not r.is_shaft:
+                        area.setdefault(r.kind, []).append(r.area)
+        return area
+
+    def test_turned(self):
+        import statistics as st
+        a = self._areas(self.turned)
+        self.assertLessEqual(st.median(a["bathroom"]), 14)
+        self.assertLessEqual(max(a["bathroom"]), 30)
+        self.assertLessEqual(max(a["livingroom"]), 120)
+        self.assertLessEqual(st.median(a["livingroom"]), 55)    # 1.3 x the old 42
+
+    def test_big_rectangles(self):
+        import statistics as st
+        a = self._areas(self.big)
+        self.assertLessEqual(st.median(a["livingroom"]), 47)    # 1.3 x the old 36
+        self.assertLessEqual(st.median(a["bedroom"]), 27)       # 1.3 x the old 21
 
 if __name__ == "__main__":
     unittest.main()

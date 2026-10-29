@@ -146,10 +146,10 @@ def programme_for_house_floor(area: int, level: int, levels: int,
     """Rooms of one house floor (level 0 = ground); None when below its lo sum."""
     if levels == 1:
         rooms = ["hall", "livingroom", "kitchen", "bedroom", "bathroom"]
-        extra = [(55, "bedroom"), (70, "dining")]
+        extra = [(55, "bedroom")]
     elif level == 0:
         rooms = ["hall", "livingroom", "kitchen"]
-        extra = [(45, "dining"), (60, "laundry")]
+        extra = [(60, "laundry")]
     else:
         rooms = ["hall", "bedroom", "bathroom"]
         extra = [(40, "bedroom"), (55, rng.choice(_BEDS))]
@@ -164,7 +164,8 @@ def programme_for_house_floor(area: int, level: int, levels: int,
 def split_by_targets(box: tuple[int, int, int, int], kinds: list[str],
                      rng: random.Random, mask: list[list[bool]] | None = None,
                      first_edge: str | None = None,
-                     area: float | None = None) -> list | None:
+                     area: float | None = None,
+                     touch: tuple[int, int, int, int] | None = None) -> list | None:
     """Cut box (x0, y0, x1, y1, inclusive) into one room per kind, sized by target.
 
     Recursive guillotine: kinds (first kept first, the rest shuffled by rng)
@@ -180,7 +181,9 @@ def split_by_targets(box: tuple[int, int, int, int], kinds: list[str],
     `area` is the tiles the rooms are sized for, when not the box's own: a
     box the footprint will clip is sized for the floor inside it, so every
     room - the bathroom too - is drawn that much bigger and keeps about its
-    size once clipped. Rooms come back in kinds order, kind set, fixed=True.
+    size once clipped. `touch` (x0, y0, x1, y1) makes the first kind's room
+    overlap that rectangle or share a wall with it: a hall by the stairs.
+    Rooms come back in kinds order, kind set, fixed=True.
     """
     from .layout import MIN_ROOM as M, Room
     if not kinds:
@@ -217,6 +220,12 @@ def split_by_targets(box: tuple[int, int, int, int], kinds: list[str],
     def fits(r, idx):
         w, h = r[2] - r[0] + 1, r[3] - r[1] + 1
         if side is not None and 0 in idx and r[side] != box[side]:
+            return False
+        if touch is not None and 0 in idx and not (
+                (r[0] <= touch[2] and r[2] >= touch[0]
+                 and r[1] <= touch[3] + 1 and r[3] >= touch[1] - 1)
+                or (r[1] <= touch[3] and r[3] >= touch[1]
+                    and r[0] <= touch[2] + 1 and r[2] >= touch[0] - 1)):
             return False
         return (w // M) * (h // M) >= len(idx) and tiles(r) >= len(idx) * M * M
 
