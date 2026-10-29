@@ -214,5 +214,34 @@ class BuildBuildingTower(unittest.TestCase):
         self.assertTrue(b.storeys)
 
 
+# Stand-in for 100 Summer Street, Boston: no OpenStreetMap footprint was
+# available (Overpass unreachable), so this is a plain 40x24-tile rectangle.
+# A real footprint can replace it.
+SUMMER_STREET_STAND_IN = (40, 24)
+
+
+class SummerStreetStandIn(unittest.TestCase):
+    """A 32-storey tower on a stand-in for the 100 Summer Street footprint."""
+
+    def test_summer_street_footprint_builds_32_storeys(self):
+        w, h = SUMMER_STREET_STAND_IN
+        b = layout.build_building(w, h, levels=32, kind="civic", seed=3)
+        self.assertEqual(len(b.storeys), 32)
+        first = lift_rects(b.storeys[0])
+        self.assertGreaterEqual(len(first), 2)
+        for s in b.storeys:
+            self.assertEqual(lift_rects(s), first)
+        self.assertNotIn("office", {r.kind for r in b.storeys[29].rooms})
+        self.assertIn("lobby", {r.kind for r in b.storeys[0].rooms})
+
+    def test_it_serialises_to_a_tbx(self):
+        from knoxbuild.buildtiles import parse_tbx
+        from knoxbuild.tbx import render_tbx
+        w, h = SUMMER_STREET_STAND_IN
+        b = layout.build_building(w, h, levels=32, kind="civic", seed=3)
+        # 32 storeys plus the roof floor render_tbx always adds
+        self.assertEqual(len(parse_tbx(render_tbx(b, "summer_street")).floors), 33)
+
+
 if __name__ == "__main__":
     unittest.main()

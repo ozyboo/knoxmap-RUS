@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.6.5
+
+- **Tower interiors** (`knoxbuild/tower.py`, `knoxbuild/layout.py`). Towers
+  (civic buildings of 12 or more storeys on a footprint of 14x14 or bigger)
+  get a central core with a bank of lifts, open office floors around it, a
+  lobby on the ground floor and a plant floor near the top.
+- **Taller towers**. The height limit is raised to 32 storeys, Build 42's own
+  limit.
+- **No overlap warning on standalone maps**. Standalone maps no longer warn
+  about overlaps.
+
 ## 1.7.6.4
 
 - **More map data servers, a server test, and a server of your own**
