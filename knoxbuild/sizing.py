@@ -48,14 +48,17 @@ def _load() -> dict[str, Size]:
 
 SIZES: dict[str, Size] = _load()
 
-# Smallest floor, in tiles, each flat plan fits in (1.5 tiles/m2: 12, 27, 40, 60 m2).
-_FLAT_MIN = (18, 40, 60, 90)
 _BEDS = ("bedroom", "kidsbedroom")
+
+
+def min_area(programme: list[str]) -> int:
+    """Tiles a programme needs for every room to reach its lo."""
+    return sum(SIZES[k].lo for k in programme)
 
 
 def programme_for_flat(area: int, rng: random.Random,
                        open_plan: bool = False) -> list[str] | None:
-    """Studio, 1-, 2- or 3-bed flat by area; None when below a studio."""
+    """Studio, 1-, 2- or 3-bed flat by area; None when below a studio's lo sum."""
     living = "openplan" if open_plan else "livingroom"
     kitchen = [] if open_plan else ["kitchen"]
     plans = [
@@ -65,28 +68,31 @@ def programme_for_flat(area: int, rng: random.Random,
         ["hall", living, *kitchen, "bedroom", "bedroom", "kidsbedroom",
          "bathroom", "bathroom"],
     ]
-    fit = [i for i, m in enumerate(_FLAT_MIN) if area >= m]
+    fit = [i for i, p in enumerate(plans) if area >= min_area(p)]
     if not fit:
         return None
     i = fit[-1]
     # ponytail: a flat just over its minimum sometimes takes the smaller plan.
-    if i and area < _FLAT_MIN[i] * 1.15 and rng.random() < 0.5:
+    if i and area < min_area(plans[i]) * 1.15 and rng.random() < 0.5:
         i -= 1
     return plans[i]
 
 
 def programme_for_house_floor(area: int, level: int, levels: int,
                               rng: random.Random) -> list[str] | None:
-    """Rooms of one house floor (level 0 = ground); None when too small."""
+    """Rooms of one house floor (level 0 = ground); None when below its lo sum."""
     if levels == 1:
-        need, rooms = 36, ["hall", "livingroom", "kitchen", "bedroom", "bathroom"]
+        rooms = ["hall", "livingroom", "kitchen", "bedroom", "bathroom"]
         extra = [(55, "bedroom"), (70, "dining")]
     elif level == 0:
-        need, rooms = 30, ["hall", "livingroom", "kitchen"]
+        rooms = ["hall", "livingroom", "kitchen"]
         extra = [(45, "dining"), (60, "laundry")]
     else:
-        need, rooms = 27, ["hall", "bedroom", "bathroom"]
+        rooms = ["hall", "bedroom", "bathroom"]
         extra = [(40, "bedroom"), (55, rng.choice(_BEDS))]
-    if area < need:
+    if area < min_area(rooms):
         return None
-    return rooms + [k for a, k in extra if area >= a]
+    for a, k in extra:
+        if area >= max(a, min_area(rooms + [k])):
+            rooms.append(k)
+    return rooms
