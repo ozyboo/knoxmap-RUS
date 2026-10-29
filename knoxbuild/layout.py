@@ -518,7 +518,7 @@ SPECIAL_MIXES = {
     # A fire station: the appliance bay, the gear store and the crew's rooms.
     "fire":       (["firegarage", "firestorage", "office", "bedroom",
                     "kitchen", "bathroom", "firestorage"],
-                   ["firestorage", "firegarage", "office"]),
+                   ["bedroom", "office", "storage"]),
     # The floors above a shop: offices, as in any high street.
     "offices":    (["office", "office", "breakroom", "bathroom", "storage", "office"],
                    ["office", "office", "storage"]),
@@ -1706,7 +1706,8 @@ def _shop_rooms(plan: Plan, rng: random.Random, street: str | None) -> None:
     else:
         sales, strip = (0, 0, w - 1 - back, h - 1), (w - back, 0, w - 1, h - 1)
     plan.rooms.append(Room(*sales))
-    _split(*strip, rng, MAX_DEPTH, plan.rooms, target_area=max(16, back * 8), mask=plan.mask)
+    _split(*strip, rng, MAX_DEPTH, plan.rooms, target_area=max(16, back * 8),
+           mask=plan.mask, small=[True])
 MIN_SHOP_ROOM = 16
 
 
@@ -2019,8 +2020,72 @@ CORRIDOR_WORTH_IT = 8
 
 NEEDS_CORRIDOR = {"school", "police", "civic", "medical", "fire", "military",
                   "library", "offices"}
+
+# Pairs that belong together when both rooms fit on the floor. Shop and
+# restaurant fronts already choose an adjacent back room in _assign_shop_floor.
+BUSINESS_NEIGHBOURS = {
+    "school": (("kitchen", "diningroom"), ("gym", "sportstorage"),
+               ("classroom", "schoollab")),
+    "church": (("lobby", "church"), ("office", "storage")),
+    "industrial": (("warehouse", "storage"), ("warehouse", "garage")),
+    "barn": (("warehouse", "storage"), ("warehouse", "garage")),
+    "military": (("kitchen", "bedroom"), ("armystorage", "office")),
+    "castle": (("hall", "church"), ("hall", "kitchen")),
+    "stadium": (("lockerroom", "sportstorage"), ("hall", "cafe")),
+    "medical": (("clinic", "medical"), ("lobby", "office")),
+    "civic": (("lobby", "office"), ("library", "storage")),
+    "police": (("policeoffice", "interrogationroom"),
+               ("policeoffice", "evidenceroom"), ("policelocker", "lockerroom")),
+    "library": (("library", "storage"), ("lobby", "library")),
+    "fire": (("firegarage", "firestorage"), ("kitchen", "bedroom")),
+    "offices": (("office", "officestorage"), ("office", "breakroom")),
+}
+
+
+def _arrange_business_rooms(plan: Plan, kind: str) -> None:
+    """Improve related-room adjacency without changing the mix or circulation."""
+    pairs = BUSINESS_NEIGHBOURS.get(kind, ())
+    if not pairs:
+        return
+    adj = _neighbours(plan)
+    rooms = plan.rooms
+
+    def satisfied(pair):
+        a, b = pair
+        return any(rooms[i - 1].kind == a and
+                   any(rooms[j - 1].kind == b for j in neighbours)
+                   for i, neighbours in adj.items())
+
+    for pair in pairs:
+        if satisfied(pair):
+            continue
+        before = sum(satisfied(p) for p in pairs)
+        done = False
+        for i, room in enumerate(rooms, 1):
+            if room.kind != pair[0]:
+                continue
+            for j in sorted(adj[i]):
+                candidate = rooms[j - 1]
+                if candidate.fixed or candidate.is_core or candidate.is_shaft or candidate.kind in CIRCULATION:
+                    continue
+                for other in rooms:
+                    if (other.kind != pair[1] or other.fixed or other.is_core
+                            or other.is_shaft or other.kind in CIRCULATION):
+                        continue
+                    if max(candidate.area, other.area) > 2 * min(candidate.area, other.area):
+                        continue
+                    candidate.kind, other.kind = other.kind, candidate.kind
+                    if satisfied(pair) and sum(satisfied(p) for p in pairs) > before:
+                        done = True
+                        break
+                    candidate.kind, other.kind = other.kind, candidate.kind
+                if done:
+                    break
+            if done:
+                break
+
 MIN_SPECIAL_ROOMS = {
-    "school": {"classroom": 1, "diningroom": 1, "gym": 1, "library": 1},
+    "school": {"classroom": 1, "diningroom": 1, "kitchen": 1, "gym": 1, "library": 1},
     "police": {"policeoffice": 1, "policelocker": 1},
     "civic": {"office": 1, "lobby": 1},
     "medical": {"clinic": 1, "medical": 1},
@@ -5726,9 +5791,9 @@ def build_building(width: int, height: int, levels: int = 1,
         core = _pick_corridor(width, height, mask, rng)
         corridor = core is not None
     elif kind in NEEDS_CORRIDOR and (
-            width * height >= CORRIDOR_WORTH_IT
-            * (settings.room_size if settings else Settings().room_size)
-            * KIND_ROOM_SCALE.get(kind, 1.0)):
+            width * height >= (4 if kind == "school" else CORRIDOR_WORTH_IT)
+            * min((settings.room_size if settings else Settings().room_size)
+                  * KIND_ROOM_SCALE.get(kind, 1.0), _room_cap(kind))):
         # A school or a clinic is rooms off a corridor. In Knox County a
         # school's halls are 11% of its rooms and 21% of its floor, and they
         # average 122 tiles: one long one serving a storey, not a dozen square
@@ -5941,7 +6006,7 @@ def _stair_foot(stairs: tuple[int, int, str] | None) -> tuple[int, int] | None:
 # church one nave, a school rooms the size of classrooms.
 # A great hall and a concourse are big rooms; neither building is cut into
 # bedsits.
-KIND_ROOM_SCALE = {"industrial": 6.0, "barn": 5.0, "shed": 8.0, "church": 12.0,
+KIND_ROOM_SCALE = {"industrial": 6.0, "barn": 16.0, "shed": 20.0, "church": 12.0,
                    "castle": 14.0, "stadium": 11.0, "mall": 16.0,
                    "shop": 2.0, "school": 9.0, "civic": 2.5,
                    "restaurant": 1.5, "medical": 1.3, "offices": 3.0,
@@ -6061,16 +6126,16 @@ def build_plan(width: int, height: int, commercial: bool = False,
                      else "garage")
         plan.rooms.append(Room(0, 0, width - 1, height - 1, kind=room_kind))
     else:
-        # A house floor gets one bathroom-sized room; anything else cut this
-        # way - a factory floor, a civic building - has no bathroom to put in
-        # it and is left alone.
+        # Reserve one small room for a bathroom when the building's mix has one.
         house_floor = not (shop_floor or commercial
                            or (mix_kind and mix_kind in SPECIAL_MIXES))
+        small_room = house_floor or shop_floor or bool(mix_kind in SPECIAL_MIXES and
+                                         "bathroom" in SPECIAL_MIXES[mix_kind][0])
         if mapped and ground:
             # The rooms OpenStreetMap has for this building, on the floor the
             # mapper drew them for; the rest of that floor and every floor
             # above is cut as it always was.
-            small = [house_floor]
+            small = [small_room]
             _mapped_rooms(plan, rng, mapped, target, mask, small)
         else:
             # A house floor is cut by what it holds, each room sized by its
@@ -6080,7 +6145,7 @@ def build_plan(width: int, height: int, commercial: bool = False,
                 plan.rooms = by_kind
             else:
                 _split(0, 0, width - 1, height - 1, rng, MAX_DEPTH, plan.rooms,
-                       target_area=target, mask=mask, small=[house_floor])
+                       target_area=target, mask=mask, small=[small_room])
     _paint(plan)
 
     # Kinds are chosen after painting, from the plan as it really is: what a
@@ -6108,8 +6173,22 @@ def build_plan(width: int, height: int, commercial: bool = False,
         # it; the mix is dealt to the rest.
         rooms = [r for r in plan.rooms if not r.is_core and not r.fixed]
         _assign_kinds(rooms, mix, fill)
+        if mix_kind == "castle" and len(rooms) == 1:
+            rooms[0].kind = "hall"
+        if mix_kind == "stadium" and len(rooms) <= 2 and not any(r.kind == "lockerroom" for r in rooms):
+            offices = [r for r in rooms if r.kind == "office"]
+            if offices:
+                min(offices, key=lambda r: r.area).kind = "lockerroom"
+        if mix_kind == "school" and any(r.kind == "diningroom" for r in rooms) \
+                and not any(r.kind == "kitchen" for r in rooms):
+            classrooms = [r for r in rooms if r.kind == "classroom"]
+            candidates = [r for r in rooms if r.kind in {"schoollab", "office", "schoolstorage"}
+                          or (r.kind == "classroom" and len(classrooms) > 1)]
+            if candidates:
+                min(candidates, key=lambda r: r.area).kind = "kitchen"
         if mix_kind in NEEDS_CORRIDOR:
             _circulation(plan, rooms)
+        _arrange_business_rooms(plan, mix_kind)
         if mix_kind in MERGE_CIRCULATION:
             _merge_halls(plan)
         if mix_kind == "mall":
