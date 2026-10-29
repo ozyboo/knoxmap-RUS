@@ -35,7 +35,8 @@ _FALLBACK = {
 
 
 def _load() -> dict[str, Size]:
-    with open(os.path.join(os.path.dirname(__file__), "room_solver.json")) as f:
+    with open(os.path.join(os.path.dirname(__file__), "room_solver.json"),
+              encoding="utf-8") as f:
         kinds = json.load(f)["kinds"]
     out = dict(_FALLBACK)
     for build, key in _FROM_JSON.items():
