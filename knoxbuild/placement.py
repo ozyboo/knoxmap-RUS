@@ -432,6 +432,7 @@ def layout(out_dir: str, map_name: str, cache_dir: str | None = None) -> dict:
     mine = {"x": where[0], "y": where[1], "w": width, "h": height}
     taken = [m for m in installed_maps()
              if not (built and m["x"] == built[0] and m["y"] == built[1])]
+    alone = standalone(out_dir)
     return {
         "vanilla": {"x": vx, "y": vy, "w": vw, "h": vh, "name": VANILLA_NAME},
         # The world as it really is, in compiled cells, for the picture.
@@ -445,9 +446,9 @@ def layout(out_dir: str, map_name: str, cache_dir: str | None = None) -> dict:
         "lotsMatch": lots_match(out_dir, (where[0], where[1])),
         "cellTiles": CELL_SIZE,
         "maxCell": MAX_CELL,
-        "standalone": standalone(out_dir),
+        "standalone": alone,
         # A standalone map is the only one in its world: nothing to clash with.
-        "clash": [] if standalone(out_dir) else (
+        "clash": [] if alone else (
             ([VANILLA_NAME] if width and height
              and overlaps(mine, {"x": vx, "y": vy, "w": vw, "h": vh}) else [])
             + [f"a map at cell {m['x']},{m['y']}" for m in taken

@@ -2,7 +2,7 @@
 
 A tower core is one block near the middle of the floor, the same on every
 storey: a stair hall (the lift lobby), a row of lifts along one long side of
-it with their doors on the hall, and toilets plus a riser room on the other.
+it with their doors on the hall, and a toilet plus a riser room on the other.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from . import layout
 TOWER_FROM_LEVELS = 12
 TOWER_MIN_SIDE = 14
 PLANT_SHARE = 0.9      # the plant floor sits this far up the building
-SERVICE_WIDE = 4       # toilets and riser: deep enough to be rooms
+SERVICE_WIDE = 4       # toilet and riser: deep enough to be rooms
 HALL_MIN_LONG = layout.STAIR_RUN + 1
 # A core further than this from the middle is not a tower core: no fit, no tower.
 CENTRE_SLACK = 4
@@ -56,10 +56,11 @@ def _shape(n: int, lifts_west: bool) -> TowerCore:
     for i in range(n):
         y = s * i
         core.lifts.append(((lift_x, y, lift_x + s - 1, y + s - 1), (door_x, y, "W")))
-    # Toilets and a riser stacked down the far side, each at least MIN_ROOM
-    # deep: a thinner room is a sliver layout._mend_fragments folds away. A
-    # hall too short for three keeps one toilet and the riser.
-    kinds = ("bathroom", "bathroom", "storage")[-min(3, long_ // layout.MIN_ROOM):]
+    # One toilet and the riser, stacked down the far side. Every tower gets
+    # exactly these two: the hall is at most 8 long (4 lifts of 2), and a
+    # third room would make each thinner than MIN_ROOM, a sliver that
+    # layout._mend_fragments folds away.
+    kinds = ("bathroom", "storage")
     each = long_ // len(kinds)
     for i, kind in enumerate(kinds):
         y = each * i
