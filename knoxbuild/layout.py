@@ -5450,8 +5450,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
     target = min(max(target, floor_tiles / MAX_ROOMS_PER_FLOOR),
                  _room_cap(mix_kind))
 
+    arms: list = []
     if tower is not None:
-        _tower_rooms(plan, tower, ground, plant, street)
+        arms = _tower_rooms(plan, tower, ground, plant, street)
     elif kind == "apartment":
         _apartment_rooms(plan, rng, target, HOTEL_FRONTAGE if hotel else FLAT_FRONTAGE)
     elif shop_floor and kind in ("shop", "restaurant"):
@@ -5525,6 +5526,16 @@ def build_plan(width: int, height: int, commercial: bool = False,
         _carve_shaft(plan, shaft, shaft_door)
     for extra, extra_door in extra_shafts or ():
         _carve_shaft(plan, extra, extra_door)
+    # A tower's hall arms go on after the shafts: one tile thick, the
+    # _mend_fragments in _paint and _carve_shaft would fold them into the offices they are there to serve.
+    for rect in arms:
+        plan.rooms.append(Room(*rect, kind="hall"))
+        for y in range(rect[1], rect[3] + 1):
+            for x in range(rect[0], rect[2] + 1):
+                if mask is None or mask[y][x]:
+                    plan.grid[y][x] = len(plan.rooms)
+    if arms:
+        _renumber(plan)
 
     # A cell is a cell: rooms far bigger than their kind ever is are cut down
     # now the kind is known, before any door is placed on them.
@@ -5587,18 +5598,26 @@ def build_plan(width: int, height: int, commercial: bool = False,
 
 
 def _tower_rooms(plan: Plan, tower, ground: bool, plant: bool,
-                 street: str | None) -> None:
+                 street: str | None) -> list:
     """Cut an office tower's storey round its core (knoxbuild/tower.py).
 
     A hall one tile wide runs round the core block: the lift lobby, which the
-    stair hall opens onto at its ends and the toilets open off. Beyond it the
-    floor is cut pinwheel-fashion into up to four large areas, each with a
-    whole side on that hall, so every one gets its own door onto the lift
-    lobby and none is reached through another. A side too thin for a room
+    stair hall opens onto at its ends and the toilet and riser open off.
+    Beyond it the floor is cut pinwheel-fashion into up to four large areas,
+    each with a whole side on that hall, so every one gets its own door onto
+    the lift lobby and none is reached through another. A side too thin for a room
     (thinner than MIN_ROOM) is no office: it joins the hall. On the ground
     floor the area facing the street is the lobby; on the plant floor every
     area is storage. The lifts are painted over the hall afterwards, by
     build_plan's shafts, and the stair hall by _paint, as plan.core.
+
+    An office area bigger than _room_cap("civic") is cut into strips running
+    away from the hall, each no bigger than the cap and each with its own end
+    on the hall. Each area's far end runs on past the hall, alongside the next
+    area round (N alongside W, E alongside N, S alongside E, W alongside S),
+    so the strips there reach the hall down an arm: one tile of hall taken off
+    that neighbour. The arms are returned, for build_plan to paint after
+    _paint.
     """
     w, h = plan.width, plan.height
     rects = ([tower.stair] + [r for r, _ in tower.lifts]
@@ -5619,14 +5638,53 @@ def _tower_rooms(plan: Plan, tower, ground: bool, plant: bool,
     size = {s: _inside(*r, plan.mask) for s, r in areas.items()}
     lobby = max(areas, default=None, key=lambda s: (
         s == street and size[s] >= MIN_ROOM * MIN_ROOM, size[s]))
+    kinds = {s: "storage" if plant else "lobby" if ground and s == lobby
+             else "office" for s in areas}
+    cap = _room_cap("civic")
+    big = [s for s in areas if kinds[s] == "office" and size[s] > cap]
+    arms = []
+    # The arm for each side, off the neighbour it runs alongside, and what is
+    # left of that neighbour.
+    beside = {"N": "W", "E": "N", "S": "E", "W": "S"}
+    for side in big:
+        nb = beside[side]
+        if nb not in areas:
+            continue
+        a0, b0, a1, b1 = areas[nb]
+        arm, rest = {"N": ((a0, b0, a1, b0), (a0, b0 + 1, a1, b1)),
+                     "E": ((a1, b0, a1, b1), (a0, b0, a1 - 1, b1)),
+                     "S": ((a0, b1, a1, b1), (a0, b0, a1, b1 - 1)),
+                     "W": ((a0, b0, a0, b1), (a0 + 1, b0, a1, b1))}[side]
+        arms.append(arm)
+        areas[nb] = rest
     for side, rect in areas.items():
-        kind = ("storage" if plant else "lobby" if ground and side == lobby
-                else "office")
-        plan.rooms.append(Room(*rect, kind=kind))
+        for piece in (_strips(rect, side, cap) if side in big else [rect]):
+            plan.rooms.append(Room(*piece, kind=kinds[side]))
     if ground and lobby is None:
         hall.kind = "lobby"
     for rect, kind in tower.service:
         plan.rooms.append(Room(*rect, kind=kind))
+    return arms
+
+
+def _strips(rect, side: str, cap: int) -> list:
+    """`rect` cut across its hall `side` into strips of at most `cap` tiles."""
+    x0, y0, x1, y1 = rect
+    along = side in "NS"            # the hall runs along x
+    lo, hi = (x0, x1) if along else (y0, y1)
+    depth = (y1 - y0 + 1) if along else (x1 - x0 + 1)
+    length = hi - lo + 1
+    # ponytail: deeper than cap / MIN_ROOM (56 tiles off the hall, footprints
+    # past ~130 across) a strip MIN_ROOM wide is still over the cap; cutting
+    # along the depth too would need a corridor down the strip.
+    per = max(MIN_ROOM, cap // depth)
+    n = max(1, min(-(-length // per), length // MIN_ROOM))
+    out = []
+    for i in range(n):
+        b = lo + length // n + (i < length % n) - 1
+        out.append((lo, y0, b, y1) if along else (x0, lo, x1, b))
+        lo = b + 1
+    return out
 
 
 def _tower_entrance(plan: Plan, rng: random.Random, street: str | None,
@@ -5645,7 +5703,7 @@ def _tower_entrance(plan: Plan, rng: random.Random, street: str | None,
     runs = _outside_runs(plan, lobby)
     if not runs:
         return
-    _side, wall = max(runs, key=lambda r: (r[0] == (street or "S"), len(r[1])))
+    wall = max(runs, key=lambda r: (r[0] == (street or "S"), len(r[1])))[1]
     front = wall[len(wall) // 2]
     plan.doors.append(front)
     if not entrances:

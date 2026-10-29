@@ -137,6 +137,24 @@ class TowerFloor(unittest.TestCase):
                     self.assertEqual(len(plan.shafts), len(
                         tower.pick_core(w, h, None, random.Random(seed)).lifts))
 
+    def test_big_office_areas_are_cut_to_the_civic_cap(self):
+        cap = layout._room_cap("civic")
+        for w, h in ((60, 60), (30, 40)):
+            for seed in range(3):
+                for ground in (False, True):
+                    with self.subTest(w=w, h=h, seed=seed, ground=ground):
+                        plan = tower_floor(w, h, seed, ground=ground, street="S",
+                                           level=0 if ground else 5)
+                        links = door_links(plan)
+                        lobby = lift_lobby(plan, links)
+                        offices = [i for i, r in enumerate(plan.rooms, 1)
+                                   if r.kind == "office"]
+                        self.assertTrue(offices)
+                        for i in offices:
+                            tiles = sum(row.count(i) for row in plan.grid)
+                            self.assertLessEqual(tiles, cap, i)
+                            self.assertTrue(links.get(i, set()) & lobby, i)
+
     def test_ground_floor_has_a_lobby_with_an_entrance(self):
         for w, h in FOOTPRINTS:
             for seed in range(4):
