@@ -54,3 +54,31 @@ Furniture never blocks a door or part of a room, and rooms keep the pieces that 
   essentials (toilet, sink, bed, fridge, kitchen counter) deleted: ~0.
 - Existing walkability tests, `tools/audit_layouts.py 400`, `tools/selftest.py` pass.
 - Compile-time check: furnishing time per building within 1.5x of today.
+
+## Result (furnish_measure.py, 100 houses + 100 flat blocks; before = f92dea5, after = Task 5)
+| | before (Task 3) | after |
+|---|---|---|
+| placed | 43,189 | 43,191 |
+| removed | 3,093 (7.2%) | 1,052 (2.4%) |
+| essentials removed | 971 | 31 |
+| on a window square / elsewhere | 2,813 / 280 | 868 / 184 |
+| bathroom with toilet | .87 | 1.00 |
+| kitchen with fridge | .80 | .99 |
+| openplan with fridge | .97 | 1.00 |
+| livingroom with sofa | .99 | .99 |
+| bedroom with bed | .79 | .81 |
+| kidsbedroom with bed | .89 | .99 |
+| time | 9.9 s | 10.8 s |
+
+- Against the plan baseline (a731daa: 3,327 removed of 42,875, 7.8%, 1,065 essentials, 9.2 s): removed 2.4%,
+  essentials 31, time 1.17x.
+- removed.py (same sample), removed by room before (4b6a326) -> after: bedroom 791 -> 444, bathroom 728 -> 36,
+  openplan 615 -> 10, livingroom 557 -> 388, kitchen 291 -> 9, kidsbedroom 159 -> 86, hall 156 -> 53;
+  3,414 -> 1,052 in all.
+- Essentials are not ~0. The 31 that are left: 16 bathroom sinks in 3x3 bathrooms where the sink's tile is the
+  window square and there is no free wall; 12 on the clearance of doors slid off corners after furnishing (bath 4,
+  double bed 3, counter 2, stove 2, kitchen sink 1); 3 fridges in full kitchens.
+- Pieces removed away from window squares (184) come from window squares in corner pockets of full rooms (the
+  window rule wants an occupied square reached, so the stack on the way goes too), pieces on a moved door's
+  clearance that cannot move, and knock-ons of doors sliding into corner pockets. The window rule is unchanged.
+- Test guards on SAMPLE (30 + 30): removed 2.8% (< 3%), essentials 12 (<= 16), elsewhere 0.37% (< 0.45%).

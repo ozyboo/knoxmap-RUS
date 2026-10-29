@@ -28,7 +28,7 @@
   4. A one-door spine ends at the farthest tile that is at least one tile in from every wall. A room with no such tile (2 tiles wide) gets only the door clearance.
   5. Shops (`furnish_store`), service bays and dining wall sets avoid the walkway (it is passed in their `keep_clear`) but get no per-piece connectivity check; their layouts already leave aisles, and the safety net still covers them.
   6. Centre groups keep their rugs off the walkway too (the group is checked as one block). Bath mats may lie on it (floor furniture).
-  7. Doors moved by `_doors_off_corners` after furnishing (23 of 1,558 on the sample) are not re-cleared; the safety net handles them.
+  7. ~~Doors moved by `_doors_off_corners` after furnishing (23 of 1,558 on the sample) are not re-cleared; the safety net handles them.~~ No longer holds (Task 5): `_make_way_for_windows` also moves one-tile stacks off the clearance of every door; what cannot move is left to the safety net.
   8. `tests/test_layout_walkability.py::test_furniture_is_removed_from_window_approach` changes: the bookshelf is now moved, not deleted (Task 5).
 
 ## Review Focus
