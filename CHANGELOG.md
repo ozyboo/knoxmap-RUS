@@ -6,8 +6,8 @@
   (civic buildings of 12 or more storeys on a footprint of 14x14 or bigger)
   get a central core with a bank of lifts, open office floors around it, a
   lobby on the ground floor and a plant floor near the top.
-- **Taller towers**. The height limit is raised to 32 storeys, Build 42's own
-  limit.
+- **Taller towers**. The height limit is raised to 31 storeys: Build 42 has
+  32 levels above ground and the roof takes the last one.
 - **No overlap warning on standalone maps**. Standalone maps no longer warn
   about overlaps.
 

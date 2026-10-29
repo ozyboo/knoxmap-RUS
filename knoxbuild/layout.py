@@ -5154,7 +5154,10 @@ def build_building(width: int, height: int, levels: int = 1,
         found = _pick_shaft(core, width, height, mask, stairs)
         if found:
             shaft, shaft_door = found
-    lifts = [r for r, _ in tcore.lifts] if tcore is not None else [shaft]
+    # A tower's toilet and riser are part of its core too: the step must not
+    # cut through them on the upper floors.
+    lifts = ([r for r, _ in tcore.lifts] + [r for r, _ in tcore.service]
+             if tcore is not None else [shaft])
     upper_mask, setback_at = _setback(width, height, mask, levels, core, lifts,
                                       corridor)
     # Shops under flats where the town is dense, and wherever the map puts a

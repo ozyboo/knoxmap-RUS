@@ -1,5 +1,6 @@
 import random
 import unittest
+from unittest import mock
 
 from knoxbuild import layout, tower
 
@@ -19,7 +20,7 @@ class Qualifies(unittest.TestCase):
         self.assertFalse(tower.qualifies("civic", 12, 30, 13))
 
     def test_plant_level(self):
-        self.assertEqual(tower.plant_level(32), 29)
+        self.assertEqual(tower.plant_level(31), 28)
 
 
 class PickCore(unittest.TestCase):
@@ -157,7 +158,7 @@ class TowerFloor(unittest.TestCase):
     def test_ground_floor_with_uses_and_mapped_rooms_still_builds(self):
         mapped = [([(0, 0), (5, 0), (5, 5), (0, 5)], "kitchen")]
         for w, h in FOOTPRINTS:
-            plan = tower_floor(w, h, 2, ground=True, uses=[("shop", "office")],
+            plan = tower_floor(w, h, 2, ground=True, uses=[("bank", "office")],
                                mapped=mapped)
             links = door_links(plan)
             lobbies = [i for i, r in enumerate(plan.rooms, 1) if r.kind == "lobby"]
@@ -170,16 +171,16 @@ def lift_rects(storey):
 
 
 class BuildBuildingTower(unittest.TestCase):
-    def test_a_32_storey_tower_builds(self):
-        b = layout.build_building(30, 40, levels=32, kind="civic", seed=3)
-        self.assertEqual(len(b.storeys), 32)
+    def test_a_31_storey_tower_builds(self):
+        b = layout.build_building(30, 40, levels=31, kind="civic", seed=3)
+        self.assertEqual(len(b.storeys), 31)
         first = lift_rects(b.storeys[0])
         self.assertGreaterEqual(len(first), 2)
         for s in b.storeys:
             self.assertEqual(lift_rects(s), first)
             self.assertEqual(sorted((x, y, d) for _, (x, y, d) in s.shafts),
                              sorted((x, y, d) for _, (x, y, d) in b.storeys[0].shafts))
-        self.assertNotIn("office", {r.kind for r in b.storeys[29].rooms})
+        self.assertNotIn("office", {r.kind for r in b.storeys[tower.plant_level(31)].rooms})
         self.assertIn("office", {r.kind for r in b.storeys[5].rooms})
         self.assertNotIn("retail", {r.kind for r in b.storeys[0].rooms})
         self.assertIn("lobby", {r.kind for r in b.storeys[0].rooms})
@@ -200,18 +201,40 @@ class BuildBuildingTower(unittest.TestCase):
                     self.assertIn(i, seen, (lvl, i, r.kind))
 
     def test_setback_keeps_core_inside_upper_floors(self):
+        # 20x14 seed 2014 is the footprint whose step cut through the toilet.
+        for w, h, seed in ((30, 40, 3), (20, 14, 2014)):
+            with self.subTest(w=w, h=h, seed=seed):
+                b = layout.build_building(w, h, levels=12, kind="civic", seed=seed)
+                t = tower.pick_core(w, h, None, random.Random(seed ^ 0x70E2))
+                self.assertIsNotNone(t)
+                upper = b.storeys[-1]
+                cores = [r for r in upper.rooms if r.is_core]
+                service = [r for r, _ in t.service]
+                if upper.mask is None:
+                    continue        # no step at all keeps the core whole too
+                for rect in (lift_rects(upper) + service
+                             + [(c.x0, c.y0, c.x1, c.y1) for c in cores]):
+                    for x, y in cells(rect):
+                        self.assertTrue(upper.mask[y][x], (rect, x, y))
+                for rect, kind in t.service:
+                    self.assertTrue(any((r.x0, r.y0, r.x1, r.y1) == rect
+                                        and r.kind == kind for r in upper.rooms),
+                                    (rect, kind))
         b = layout.build_building(30, 40, levels=12, kind="civic", seed=3)
-        upper = b.storeys[-1]
-        self.assertIsNotNone(upper.mask)
-        cores = [r for r in upper.rooms if r.is_core]
-        for rect in lift_rects(upper) + [(c.x0, c.y0, c.x1, c.y1) for c in cores]:
-            for x, y in cells(rect):
-                self.assertTrue(upper.mask[y][x], (x, y))
+        self.assertIsNotNone(b.storeys[-1].mask)
 
     def test_a_footprint_with_no_room_for_a_core_falls_back(self):
         mask = [[not (x >= 8 and y < 12) for x in range(20)] for y in range(20)]
-        b = layout.build_building(20, 20, levels=14, kind="civic", seed=1, mask=mask)
-        self.assertTrue(b.storeys)
+        self.assertIsNone(tower.pick_core(20, 20, mask, random.Random(1 ^ 0x70E2)))
+        # The ordinary path: no storey is cut as a tower, and one lift. (The
+        # ordinary civic mix has lobbies of its own, so the kind proves nothing.)
+        with mock.patch.object(layout, "_tower_rooms",
+                               side_effect=AssertionError("tower path ran")):
+            b = layout.build_building(20, 20, levels=14, kind="civic", seed=1,
+                                      mask=mask)
+        self.assertEqual(len(b.storeys), 14)
+        for s in b.storeys:
+            self.assertEqual(len(s.shafts), 1)
 
 
 # Stand-in for 100 Summer Street, Boston: no OpenStreetMap footprint was
@@ -221,26 +244,27 @@ SUMMER_STREET_STAND_IN = (40, 24)
 
 
 class SummerStreetStandIn(unittest.TestCase):
-    """A 32-storey tower on a stand-in for the 100 Summer Street footprint."""
+    """A tower at the 31-storey cap on a stand-in for the 100 Summer Street
+    footprint (32 storeys in life; Build 42 has room for 31 and the roof)."""
 
-    def test_summer_street_footprint_builds_32_storeys(self):
+    def test_summer_street_footprint_builds_31_storeys(self):
         w, h = SUMMER_STREET_STAND_IN
-        b = layout.build_building(w, h, levels=32, kind="civic", seed=3)
-        self.assertEqual(len(b.storeys), 32)
+        b = layout.build_building(w, h, levels=31, kind="civic", seed=3)
+        self.assertEqual(len(b.storeys), 31)
         first = lift_rects(b.storeys[0])
         self.assertGreaterEqual(len(first), 2)
         for s in b.storeys:
             self.assertEqual(lift_rects(s), first)
-        self.assertNotIn("office", {r.kind for r in b.storeys[29].rooms})
+        self.assertNotIn("office", {r.kind for r in b.storeys[tower.plant_level(31)].rooms})
         self.assertIn("lobby", {r.kind for r in b.storeys[0].rooms})
 
     def test_it_serialises_to_a_tbx(self):
         from knoxbuild.buildtiles import parse_tbx
         from knoxbuild.tbx import render_tbx
         w, h = SUMMER_STREET_STAND_IN
-        b = layout.build_building(w, h, levels=32, kind="civic", seed=3)
-        # 32 storeys plus the roof floor render_tbx always adds
-        self.assertEqual(len(parse_tbx(render_tbx(b, "summer_street")).floors), 33)
+        b = layout.build_building(w, h, levels=31, kind="civic", seed=3)
+        # 31 storeys plus the roof floor render_tbx always adds: all 32 levels
+        self.assertEqual(len(parse_tbx(render_tbx(b, "summer_street")).floors), 32)
 
 
 if __name__ == "__main__":
