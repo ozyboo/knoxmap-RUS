@@ -4192,8 +4192,11 @@ def _place_group(plan: Plan, idx: int, room: Room,
             break
         ring = {(x, y) for y in range(oy + gy0 - 1, oy + gy1 + 2)
                 for x in range(ox + gx0 - 1, ox + gx1 + 2)}
-        if any(_room_at(plan, x, y) != idx or (x, y) in occupied
-               or (x, y) in keep_clear for x, y in ring):
+        # The aisle round the group may run over the walkway or a doorway's
+        # clearance - it is bare floor there - but nothing solid may.
+        if any(_room_at(plan, x, y) != idx or (x, y) in occupied for x, y in ring):
+            continue
+        if any((ox + x, oy + y) in keep_clear for x, y in solid):
             continue
         if keeps_open and not keeps_open({(ox + x, oy + y) for x, y in solid}):
             continue
@@ -4436,13 +4439,19 @@ def _furnish(plan: Plan, rng: random.Random,
         room_cells = {(x, y) for y in range(r.y0, r.y1 + 1)
                       for x in range(r.x0, r.x1 + 1) if plan.grid[y][x] == idx}
 
+        floor = FR.OpenFloor(room_cells, walk, POCKET_TILES)
+        counted = [start]
+
         def keeps_open(tiles) -> bool:
             """Whether a new blocking piece on `tiles` leaves the walkway clear
             and cuts off no patch of floor bigger than a pocket. Only this
-            room's pieces have gone in since `start`."""
-            blocked = {c for role, x, y, o in plan.furniture[start:] if _blocks(role)
-                       for c in _cells_for(role, x, y, o)}
-            return FR.keeps_floor_open(room_cells, blocked, walk, set(tiles), POCKET_TILES)
+            room's pieces have gone in since `start`, and only by appending
+            (_stand_on_something inserts once the room is done)."""
+            for role, x, y, o in plan.furniture[counted[0]:]:
+                if _blocks(role):
+                    floor.block(_cells_for(role, x, y, o))
+            counted[0] = len(plan.furniture)
+            return floor.keeps_open(tiles)
         # Nothing standing goes in the stair hall or corridor: a flat's front
         # door and the only way past the flight both run through it, and one
         # bookcase beside the stairs closes the corridor.
@@ -5367,8 +5376,11 @@ def _under_a_window(role: str) -> bool:
             or role.startswith(("bed", "double_bed", "sofa_", "counter")))
 
 
-ZERO = (0, 0, 0)
-NONE = (MANY, MANY, MANY)
+# A cost (essentials, secondary, decoration) packed into one int that sorts
+# the same way: a tuple sum per step was a third of _open_up's time.
+RANK_COST = (1 << 40, 1 << 20, 1)
+ZERO = 0
+NONE = 1 << 62
 
 
 def _open_up(storey: "Plan", starts: set) -> set:
@@ -5387,9 +5399,7 @@ def _open_up(storey: "Plan", starts: set) -> set:
         rank = FR.priority(role, storey.rooms[idx - 1].kind if idx else "")
         for tile in _tiles_under(role, fx, fy, orient):
             at.setdefault(tile, set()).add(i)
-            c = list(weight.get(tile, ZERO))
-            c[rank] += 1
-            weight[tile] = tuple(c)
+            weight[tile] = weight.get(tile, ZERO) + RANK_COST[rank]
 
     def step(ax, ay, bx, by) -> bool:
         """Whether you can walk from one tile to the next: same room, or a
@@ -5425,8 +5435,7 @@ def _open_up(storey: "Plan", starts: set) -> set:
         for nxt in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
             if not step(x, y, *nxt):
                 continue
-            c = weight.get(nxt)
-            cost = here if c is None else (here[0] + c[0], here[1] + c[1], here[2] + c[2])
+            cost = here + weight.get(nxt, ZERO)
             if cost < best.get(nxt, NONE):
                 best[nxt], back[nxt] = cost, (x, y)
                 heapq.heappush(heap, (cost, nxt))
@@ -5487,6 +5496,22 @@ def _open_up(storey: "Plan", starts: set) -> set:
 
 
 _STEP = {"N": (0, -1), "W": (-1, 0), "S": (0, 1), "E": (1, 0)}
+
+
+def _stay_reachable(cells: set, blocked: set, walk: set, squares: set) -> bool:
+    """Whether each of `squares` can still be walked to from the walkway, over
+    the room's bare floor. A room with no walkway has nothing to join."""
+    start = [t for t in walk if t in cells and t not in blocked]
+    if not start or not squares:
+        return True
+    seen, todo = set(start), list(start)
+    while todo:
+        x, y = todo.pop()
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if n in cells and n not in blocked and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return squares <= seen
 
 
 def _make_way_for_windows(storey: "Plan", stairs: tuple[int, int, str] | None) -> int:
@@ -5584,10 +5609,17 @@ def _make_way_for_windows(storey: "Plan", stairs: tuple[int, int, str] | None) -
             return not front or (ahead in cells and ahead not in blocked)
 
         covered = {c for cs in cells_of for c in cs}
+        floor = FR.OpenFloor(cells, walk, POCKET_TILES)
+        floor.block(blocked)
+        # Every window square of the room that is bare floor, this one once
+        # it is cleared: each has to stay joined to the walkway.
+        opens = (squares & cells) - blocked
+        opens.add(t)
         for d in nearest(cells - off - walk - covered - fronts):
             face = wall_of(d, facings)
             if (face is None or not opened(d, face) or not fits(stack, *d, face)
-                    or not FR.keeps_floor_open(cells, blocked, walk, {d}, POCKET_TILES)):
+                    or not floor.keeps_open({d})
+                    or not _stay_reachable(cells, blocked | {d}, walk, opens - {d})):
                 continue
             put(stack, *d, face)
             moved += len(stack)

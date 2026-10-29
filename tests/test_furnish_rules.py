@@ -131,6 +131,32 @@ class Walkway(unittest.TestCase):
         self.assertTrue({(5, 1), (1, 5)} <= w)
         self.assertTrue(connected(w))
 
+    def test_tree_as_one_search_per_way_in(self):
+        # walkway grows its tree from one kept distance field; it must join
+        # the ways in exactly as a fresh _path search per way in did.
+        def reference(cells, entries):
+            terminals = sorted({e for e in entries if e in cells})
+            depth = FR._depth(cells)
+            tree, pending = {terminals[0]}, set(terminals[1:])
+            while pending:
+                path = FR._path(cells, depth, tree, pending.__contains__)
+                if path is None:
+                    break
+                tree.update(path)
+                pending -= tree
+            return tree
+
+        rng = random.Random(11)
+        for case in range(400):
+            w, h = rng.randint(2, 12), rng.randint(2, 12)
+            cells = rect(w, h) - {(rng.randrange(w), rng.randrange(h))
+                                  for _ in range(rng.randint(0, w * h // 4))}
+            if not cells:
+                continue
+            entries = rng.sample(sorted(cells), min(len(cells), rng.randint(2, 8)))
+            with self.subTest(case=case):
+                self.assertEqual(walkway(cells, entries), reference(cells, entries))
+
     def test_deterministic(self):
         entries = [(0, 2), (6, 2), (3, 0)]
         self.assertEqual(walkway(rect(7, 5), entries),
@@ -154,6 +180,27 @@ class FloorStaysOpen(unittest.TestCase):
 
     def test_nothing_new(self):
         self.assertIs(keeps_floor_open(self.cells, set(), self.walk, set(), 2), True)
+
+    def test_open_floor_answers_as_keeps_floor_open(self):
+        # The incremental check must give the same answer for every query, so
+        # a seed lays out the same rooms with it as without.
+        rng = random.Random(5)
+        for case in range(300):
+            w, h = rng.randint(2, 7), rng.randint(2, 7)
+            cells = rect(w, h) - {(rng.randrange(w), rng.randrange(h))
+                                  for _ in range(rng.randint(0, 3))}
+            walk = set(rng.sample(sorted(cells), min(len(cells), rng.randint(0, 3))))
+            floor = FR.OpenFloor(cells, walk, 2)
+            blocked = set()
+            for _ in range(12):
+                x, y = rng.randrange(-1, w + 1), rng.randrange(-1, h + 1)
+                new = {(x, y)} | ({(x + 1, y)} if rng.random() < 0.3 else set())
+                with self.subTest(case=case, blocked=sorted(blocked), new=sorted(new)):
+                    self.assertIs(floor.keeps_open(new),
+                                  keeps_floor_open(cells, blocked, walk, new, 2))
+                if rng.random() < 0.5:
+                    blocked |= new
+                    floor.block(new)
 
 
 
@@ -334,6 +381,49 @@ class ClearUpAfterBuild(unittest.TestCase):
         # full rooms), and knock-ons of doors that slid into a corner pocket.
         route = [(r, k) for r, k, w in self.removed if not w]
         self.assertLess(len(route), 0.0045 * self.placed, route)
+
+    def test_window_squares_are_not_shut_in(self):
+        # A piece moved off a window square must not box the square in: free
+        # window squares in a pocket of two tiles or fewer. Measured 28 of
+        # 1,993 (136 of 2,013 when the move ignored it); what is left are
+        # squares the plan itself leaves in a corner.
+        free = pocket = 0
+        for b in self.builds:
+            for s in b.storeys:
+                cover = {c for role, x, y, o in s.furniture if layout._blocks(role)
+                         for c in layout._tiles_under(role, x, y, o)}
+                for x, y, d in s.windows:
+                    for t in (((x - 1, y), (x, y)) if d == "W" else ((x, y - 1), (x, y))):
+                        if not (0 <= t[0] < s.width and 0 <= t[1] < s.height
+                                and s.grid[t[1]][t[0]]) or t in cover:
+                            continue
+                        free += 1
+                        seen, todo = {t}, [t]
+                        while todo and len(seen) <= 2:
+                            cx, cy = todo.pop()
+                            for q in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                                if (0 <= q[0] < s.width and 0 <= q[1] < s.height
+                                        and s.grid[q[1]][q[0]] == s.grid[t[1]][t[0]]
+                                        and q not in cover and q not in seen):
+                                    seen.add(q)
+                                    todo.append(q)
+                        pocket += len(seen) <= 2
+        self.assertLess(pocket, 0.02 * free, (pocket, free))
+
+    def test_kitchens_keep_a_table(self):
+        # 27 of 149 kitchens before the walkway rule (18%), 3 when the table's
+        # aisle could not cross it; the aisle is bare floor, so it may.
+        kitchens = tables = 0
+        for b in self.builds:
+            for s in b.storeys:
+                for idx, r in enumerate(s.rooms, 1):
+                    if r.kind != "kitchen":
+                        continue
+                    kitchens += 1
+                    tables += any(role in ("round_table", "dining_table", "table")
+                                  for role, x, y, _o in s.furniture
+                                  if s.grid[y][x] == idx)
+        self.assertGreaterEqual(tables / kitchens, 0.08)
 
     def test_rooms_keep_their_essentials(self):
         want = {"bathroom": (("toilet",), 0.87), "kitchen": (("fridge",), 0.87),

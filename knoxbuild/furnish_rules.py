@@ -61,13 +61,15 @@ def _depth(cells):
 def _path(cells, depth, sources, goal):
     """Cheapest path from any source until goal(tile) is first popped: fewest
     tiles, ties away from walls. Returns the path tiles (source excluded from
-    cost, included in the list), or None."""
-    best = {s: (0, 0) for s in sources}
+    cost, included in the list), or None. A cost is tiles << 20 plus the wall
+    tiles among them: one int sorts as the pair did, and faster."""
+    best = {s: 0 for s in sources}
     parent = {}
-    heap = [((0, 0), y, x) for x, y in sources]
+    heap = [(0, y, x) for x, y in sources]
     heapq.heapify(heap)
+    pop, push, step = heapq.heappop, heapq.heappush, 1 << 20
     while heap:
-        cost, y, x = heapq.heappop(heap)
+        cost, y, x = pop(heap)
         t = (x, y)
         if cost != best[t]:
             continue
@@ -76,24 +78,42 @@ def _path(cells, depth, sources, goal):
             while path[-1] in parent:
                 path.append(parent[path[-1]])
             return path
-        for n in _near(t):
-            if n not in cells:
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            d = depth.get(n)  # depth has a value for every tile of cells
+            if d is None:
                 continue
-            c = (cost[0] + 1, cost[1] + (depth[n] == 1))
-            if n not in best or c < best[n]:
+            c = cost + step + (d == 1)
+            b = best.get(n)
+            if b is None or c < b:
                 best[n] = c
                 parent[n] = t
-                heapq.heappush(heap, (c, n[1], n[0]))
+                push(heap, (c, n[1], n[0]))
     return None
+
+
+_WALKWAYS: dict = {}
 
 
 def walkway(cells, entries):
     """Tiles that stay free: a path joining the room's ways in, or for a single
     way in a spine to the farthest tile that is off every wall, where the floor
-    off the walls is at least two tiles across."""
+    off the walls is at least two tiles across.
+
+    Remembered by room and ways in: the window pass asks again for most rooms
+    the furnishing already asked about, and a mall's concourse costs a search
+    per shop door."""
     terminals = sorted({e for e in entries if e in cells})
     if not terminals:
         return set()
+    key = (frozenset(cells), tuple(terminals))
+    if key not in _WALKWAYS:
+        if len(_WALKWAYS) > 512:  # ponytail: crude cap, an LRU if it ever matters
+            _WALKWAYS.clear()
+        _WALKWAYS[key] = frozenset(_walkway(cells, terminals))
+    return set(_WALKWAYS[key])
+
+
+def _walkway(cells, terminals):
     depth = _depth(cells)
     if len(terminals) == 1:
         start = terminals[0]
@@ -153,3 +173,92 @@ def keeps_floor_open(cells, blocked, walk, new, pocket):
     else:
         keep = max(comps, key=len)  # comps are in min-tile order: ties go to the smallest
     return all(len(c) <= pocket for c in comps if c is not keep)
+
+class OpenFloor:
+    """keeps_floor_open for one room as its pieces go in. The free floor's
+    patches are kept as pieces are put down (block), and both a piece put down
+    and a query flood the room only when the new tiles might cut a patch in
+    two: when the free tiles beside them do not join up through the free ring
+    of tiles about them. The answers are keeps_floor_open's, so a seed lays
+    out the same room."""
+
+    def __init__(self, cells, walk, pocket):
+        self.cells, self.walk, self.pocket = cells, walk, pocket
+        self.blocked = set()
+        self.free = None
+
+    def block(self, tiles):
+        tiles = set(tiles) - self.blocked
+        if not tiles:
+            return
+        self.blocked |= tiles
+        if self.free is None:
+            return
+        gone = tiles & self.free
+        if gone & self.walk or self._splits(gone, tiles):
+            self.free = None
+            return
+        self.free -= gone
+        for t in gone:
+            self.size[self.patch.pop(t)] -= 1
+        self.bad = {n for n in self.bad if self.size[n] > self.pocket}
+
+    def _splits(self, gone, new):
+        """Whether taking `new` off the free floor might cut a patch in two."""
+        free = self.free
+        edge = {n for t in gone for n in _near(t) if n in free and n not in new}
+        if not edge:
+            return False
+        ring = {(x + dx, y + dy) for x, y in gone
+                for dx in (-1, 0, 1) for dy in (-1, 0, 1)} & free
+        ring -= new
+        start = min(edge)
+        seen, todo = {start}, [start]
+        while todo:
+            for t in _near(todo.pop()):
+                if t in ring and t not in seen:
+                    seen.add(t)
+                    todo.append(t)
+        return not edge <= seen
+
+    def _patches(self):
+        self.free = free = self.cells - self.blocked
+        self.patch, self.size = {}, []
+        for start in sorted(free):
+            if start in self.patch:
+                continue
+            n = len(self.size)
+            self.patch[start], todo, k = n, [start], 1
+            while todo:
+                for t in _near(todo.pop()):
+                    if t in free and t not in self.patch:
+                        self.patch[t] = n
+                        todo.append(t)
+                        k += 1
+            self.size.append(k)
+        anchor = self.walk & free
+        self.keep = self.patch[min(anchor)] if anchor else None
+        self.bad = {n for n, k in enumerate(self.size)
+                    if n != self.keep and k > self.pocket}
+
+    def keeps_open(self, new):
+        new = set(new)
+        if new & self.walk:
+            return False
+        if self.free is None:
+            self._patches()
+        if self.keep is None:
+            return keeps_floor_open(self.cells, self.blocked, self.walk, new, self.pocket)
+        gone = new & self.free
+        if not gone:
+            return not self.bad
+        if self._splits(gone, new):
+            return keeps_floor_open(self.cells, self.blocked, self.walk, new, self.pocket)
+        # No patch is cut in two: each one the new tiles touch just shrinks.
+        lost = {}
+        for t in gone:
+            lost[self.patch[t]] = lost.get(self.patch[t], 0) + 1
+        if any(self.size[n] - lost.get(n, 0) > self.pocket for n in self.bad):
+            return False
+        return all(self.size[n] - k <= self.pocket
+                   for n, k in lost.items() if n != self.keep)
