@@ -4561,7 +4561,7 @@ function hits(a, b) {
 }
 
 function placeClashes(corner) {
-  if (!placeWorld) return [];
+  if (!placeWorld || placeWorld.standalone) return [];
   const k = placeTiles();
   const mine = { x: corner.x * k, y: corner.y * k,
                  w: placeWorld.map.w * k, h: placeWorld.map.h * k };

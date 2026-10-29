@@ -187,6 +187,10 @@ class WhatTheWindowShows(AMapOnDisk):
         world = P.layout(self.dir, "town")
         self.assertIn(P.VANILLA_NAME, world["clash"])
 
+    def test_a_standalone_map_has_nothing_to_clash_with(self):
+        P.save(self.dir, (10, 10), standalone_flag=True)
+        self.assertEqual(P.layout(self.dir, "town")["clash"], [])
+
     def test_it_says_whether_the_map_is_compiled_where_it_now_sits(self):
         self.assertFalse(P.layout(self.dir, "town")["compiled"])
         self.compiled()

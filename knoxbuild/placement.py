@@ -446,10 +446,12 @@ def layout(out_dir: str, map_name: str, cache_dir: str | None = None) -> dict:
         "cellTiles": CELL_SIZE,
         "maxCell": MAX_CELL,
         "standalone": standalone(out_dir),
-        "clash": ([VANILLA_NAME] if width and height
-                  and overlaps(mine, {"x": vx, "y": vy, "w": vw, "h": vh}) else [])
-                 + [f"a map at cell {m['x']},{m['y']}" for m in taken
-                    if width and height and overlaps(mine, m)],
+        # A standalone map is the only one in its world: nothing to clash with.
+        "clash": [] if standalone(out_dir) else (
+            ([VANILLA_NAME] if width and height
+             and overlaps(mine, {"x": vx, "y": vy, "w": vw, "h": vh}) else [])
+            + [f"a map at cell {m['x']},{m['y']}" for m in taken
+               if width and height and overlaps(mine, m)]),
     }
 
 
