@@ -270,6 +270,16 @@ class FloorStaysInOnePiece(unittest.TestCase):
                          [s.furniture for s in two.storeys])
 
 
+class ClearUpByPriority(unittest.TestCase):
+    def test_decoration_goes_before_an_essential(self):
+        room = layout.Room(0, 0, 5, 4, kind="bathroom")
+        furniture = [("plant", 2, 0, "N"), ("plant", 3, 0, "N")]
+        furniture += [("toilet", 2, y, "N") for y in range(1, 5)]
+        plan = layout.Plan(6, 5, rooms=[room], grid=[[1] * 6 for _ in range(5)],
+                           doors=[(0, 2, "W")], furniture=furniture)
+        self.assertEqual(layout._open_up(plan, {(0, 2)}), {0, 1})
+
+
 # route-removal threshold test lands in Task 5, after moved-door and window-path clearing
 
 if __name__ == "__main__":

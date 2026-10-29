@@ -14,6 +14,7 @@ room indices, so we only ever paint rooms - we never emit wall objects.
 """
 from __future__ import annotations
 
+import heapq
 import random
 from collections import deque
 from dataclasses import dataclass, field
@@ -5366,16 +5367,29 @@ def _under_a_window(role: str) -> bool:
             or role.startswith(("bed", "double_bed", "sofa_", "counter")))
 
 
+ZERO = (0, 0, 0)
+NONE = (MANY, MANY, MANY)
+
+
 def _open_up(storey: "Plan", starts: set) -> set:
     """Which pieces have to go for every room to be walked into."""
     w, h, grid = storey.width, storey.height, storey.grid
     doors = set(storey.doors)
     at: dict = {}
+    # What standing on a tile costs: the pieces that would have to go, counted
+    # (essentials, secondary, decoration) by the room each one stands in, so
+    # the search below gives up any number of plants before one toilet.
+    weight: dict = {}
     for i, (role, fx, fy, orient) in enumerate(storey.furniture):
         if not _blocks(role):
             continue
+        idx = grid[fy][fx] if 0 <= fx < w and 0 <= fy < h else 0
+        rank = FR.priority(role, storey.rooms[idx - 1].kind if idx else "")
         for tile in _tiles_under(role, fx, fy, orient):
             at.setdefault(tile, set()).add(i)
+            c = list(weight.get(tile, ZERO))
+            c[rank] += 1
+            weight[tile] = tuple(c)
 
     def step(ax, ay, bx, by) -> bool:
         """Whether you can walk from one tile to the next: same room, or a
@@ -5392,35 +5406,38 @@ def _open_up(storey: "Plan", starts: set) -> set:
             return (bx, by, "N") in doors
         return (ax, ay, "N") in doors
 
-    # A 0-1 search out from the way in: stepping onto an empty tile is free,
-    # stepping onto an occupied one costs the piece standing there. What comes
-    # back is the fewest pieces that have to move for each room to open.
+    # A search out from the way in: stepping onto an empty tile is free,
+    # stepping onto an occupied one costs the pieces standing there. What
+    # comes back is the fewest essentials, then secondary pieces, then
+    # decoration that have to move for each room to open.
     best: dict = {}
     back: dict = {}
-    queue = deque()
-    for tile in starts:
-        cost = 1 if tile in at else 0
-        if cost < best.get(tile, MANY):
+    heap: list = []
+    for tile in sorted(starts):
+        cost = weight.get(tile, ZERO)
+        if cost < best.get(tile, NONE):
             best[tile], back[tile] = cost, None
-            queue.appendleft(tile) if cost == 0 else queue.append(tile)
-    while queue:
-        x, y = queue.popleft()
-        here = best[(x, y)]
+            heapq.heappush(heap, (cost, tile))
+    while heap:
+        here, (x, y) = heapq.heappop(heap)
+        if here != best[(x, y)]:
+            continue
         for nxt in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
             if not step(x, y, *nxt):
                 continue
-            cost = here + (1 if nxt in at else 0)
-            if cost < best.get(nxt, MANY):
+            c = weight.get(nxt)
+            cost = here if c is None else (here[0] + c[0], here[1] + c[1], here[2] + c[2])
+            if cost < best.get(nxt, NONE):
                 best[nxt], back[nxt] = cost, (x, y)
-                queue.appendleft(nxt) if cost == here else queue.append(nxt)
+                heapq.heappush(heap, (cost, nxt))
 
-    walked = {grid[y][x] for (x, y), cost in best.items() if cost == 0}
+    walked = {grid[y][x] for (x, y), cost in best.items() if cost == ZERO}
     want: dict = {}
     for (x, y), cost in best.items():
         idx = grid[y][x]
         if not idx or idx in walked or storey.rooms[idx - 1].is_shaft:
             continue
-        if cost < want.get(idx, (MANY, None))[0]:
+        if cost < want.get(idx, (NONE, None))[0]:
             want[idx] = (cost, (x, y))
     goals = [tile for _cost, tile in want.values()]
 
@@ -5436,7 +5453,7 @@ def _open_up(storey: "Plan", starts: set) -> set:
         for tx, ty in sides:
             if not (0 <= tx < w and 0 <= ty < h) or not grid[ty][tx]:
                 continue
-            if best.get((tx, ty), MANY) == 0:
+            if best.get((tx, ty), NONE) == ZERO:
                 continue
             if (x, y, facing) not in doors and all(
                     _under_a_window(storey.furniture[n][0])
@@ -5444,7 +5461,7 @@ def _open_up(storey: "Plan", starts: set) -> set:
                 continue
             goals.append((tx, ty))
     shut = {(x, y) for y in range(h) for x in range(w)
-            if grid[y][x] and (x, y) not in at and best.get((x, y), MANY) > 0}
+            if grid[y][x] and (x, y) not in at and best.get((x, y), NONE) > ZERO}
     seen: set = set()
     for tile in shut:
         if tile in seen:
@@ -5459,7 +5476,7 @@ def _open_up(storey: "Plan", starts: set) -> set:
                     seen.add(nxt)
                     edge.append(nxt)
         if len(pocket) > POCKET_TILES:
-            goals.append(min(pocket, key=lambda t: best.get(t, MANY)))
+            goals.append(min(pocket, key=lambda t: best.get(t, NONE)))
 
     gone: set = set()
     for tile in goals:
