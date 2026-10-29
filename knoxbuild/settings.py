@@ -218,8 +218,8 @@ LIMITS = {
     # Build 42 has 32 levels above ground (WorldEd's MAX_WORLD_LEVELS is 64,
     # -32 to 31), and the vanilla map's tallest tower reaches level 29. Every
     # storey is a full floor of rooms and furniture, so tall towns cost build
-    # and compile time - the presets stay low and this is the ceiling.
-    "max_levels": (1, 30),
+    # and compile time - the presets stay low and 32 is the ceiling.
+    "max_levels": (1, 32),
     "vanilla_tiles": (0, 1),
     "room_size": (16, 400),
     "room_solver": (0, 1),
