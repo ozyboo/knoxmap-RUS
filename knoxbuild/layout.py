@@ -5393,7 +5393,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
                party: set | None = None,
                entrances: list[tuple[float, float, dict]] | None = None,
                profile: object | None = None,
-               mapped: list | None = None) -> Plan:
+               mapped: list | None = None,
+               tower: "TowerCore | None" = None,
+               plant: bool = False) -> Plan:
     """Lay out and furnish one storey of the given tile size.
 
     `uses` are what OpenStreetMap says a commercial ground floor holds
@@ -5404,13 +5406,17 @@ def build_plan(width: int, height: int, commercial: bool = False,
 
     `ground` gates the exterior door: a door in an upper-floor wall opens onto
     a five-metre drop, and the game will happily let a zombie walk through it.
+
+    `tower` (knoxbuild.tower.TowerCore) lays the storey out as an office
+    tower round its core instead (_tower_rooms); `uses` and `mapped` are then
+    ignored, and `plant` makes it the plant floor.
     """
     settings = settings or Settings()
     rng = random.Random(seed)
     plan = Plan(width=width, height=height, mask=mask, core=core,
                 corridor=corridor, kind=kind, party=set(party or ()),
                 profile=profile)
-    shop_floor = kind in ("shop", "retail", "restaurant") and ground
+    shop_floor = kind in ("shop", "retail", "restaurant") and ground and tower is None
     mix_kind = "offices" if kind in ("shop", "restaurant") and not ground else kind
     # Rooms in a flat are smaller than rooms in a house, and there have to be
     # enough of them per floor to make several dwellings out of.
@@ -5426,7 +5432,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
     target = min(max(target, floor_tiles / MAX_ROOMS_PER_FLOOR),
                  _room_cap(mix_kind))
 
-    if kind == "apartment":
+    if tower is not None:
+        _tower_rooms(plan, tower, ground, plant, street)
+    elif kind == "apartment":
         _apartment_rooms(plan, rng, target, HOTEL_FRONTAGE if hotel else FLAT_FRONTAGE)
     elif shop_floor and kind in ("shop", "restaurant"):
         _shop_rooms(plan, rng, street)
@@ -5457,7 +5465,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
     # Kinds are chosen after painting, from the plan as it really is: what a
     # room is depends on what it borders, and that is only known once the
     # footprint and the shaft have had their say.
-    if kind == "apartment":
+    if tower is not None:
+        pass                # _tower_rooms cut them with their kinds
+    elif kind == "apartment":
         _unit_touches_corridor(plan)
         # Trade a room between neighbours before the kinds are handed out, so
         # a flat that has gained or lost one is furnished for the size it
@@ -5504,7 +5514,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
     _cut_off_by_the_shaft(plan)
 
     _doors(plan, rng)
-    if ground:
+    if ground and tower is not None:
+        _tower_entrance(plan, rng, street, entrances)
+    elif ground:
         _exterior_door(plan, rng, avoid=_stair_foot(stairs), street=street,
                        entrances=entrances)
         if kind in (None, "house"):
@@ -5554,6 +5566,72 @@ def build_plan(width: int, height: int, commercial: bool = False,
         # its only switch to an opening is re-wired onto a wall it still has.
         _relight(plan, unlit, edges)
     return plan
+
+
+def _tower_rooms(plan: Plan, tower, ground: bool, plant: bool,
+                 street: str | None) -> None:
+    """Cut an office tower's storey round its core (knoxbuild/tower.py).
+
+    A hall one tile wide runs round the core block: the lift lobby, which the
+    stair hall opens onto at its ends and the toilets open off. Beyond it the
+    floor is cut pinwheel-fashion into up to four large areas, each with a
+    whole side on that hall, so every one gets its own door onto the lift
+    lobby and none is reached through another. A side too thin for a room
+    (thinner than MIN_ROOM) is no office: it joins the hall. On the ground
+    floor the area facing the street is the lobby; on the plant floor every
+    area is storage. The lifts are painted over the hall afterwards, by
+    build_plan's shafts, and the stair hall by _paint, as plan.core.
+    """
+    w, h = plan.width, plan.height
+    rects = ([tower.stair] + [r for r, _ in tower.lifts]
+             + [r for r, _ in tower.service])
+    x0 = max(0, min(r[0] for r in rects) - 1)
+    y0 = max(0, min(r[1] for r in rects) - 1)
+    x1 = min(w - 1, max(r[2] for r in rects) + 1)
+    y1 = min(h - 1, max(r[3] for r in rects) + 1)
+    x0 = 0 if x0 < MIN_ROOM else x0
+    y0 = 0 if y0 < MIN_ROOM else y0
+    x1 = w - 1 if w - 1 - x1 < MIN_ROOM else x1
+    y1 = h - 1 if h - 1 - y1 < MIN_ROOM else y1
+    hall = Room(x0, y0, x1, y1, kind="hall")
+    plan.rooms.append(hall)
+    areas = {"N": (0, 0, x1, y0 - 1), "E": (x1 + 1, 0, w - 1, y1),
+             "S": (x0, y1 + 1, w - 1, h - 1), "W": (0, y0, x0 - 1, h - 1)}
+    areas = {s: r for s, r in areas.items() if r[0] <= r[2] and r[1] <= r[3]}
+    size = {s: _inside(*r, plan.mask) for s, r in areas.items()}
+    lobby = max(areas, default=None, key=lambda s: (
+        s == street and size[s] >= MIN_ROOM * MIN_ROOM, size[s]))
+    for side, rect in areas.items():
+        kind = ("storage" if plant else "lobby" if ground and side == lobby
+                else "office")
+        plan.rooms.append(Room(*rect, kind=kind))
+    if ground and lobby is None:
+        hall.kind = "lobby"
+    for rect, kind in tower.service:
+        plan.rooms.append(Room(*rect, kind=kind))
+
+
+def _tower_entrance(plan: Plan, rng: random.Random, street: str | None,
+                    entrances: list | None) -> None:
+    """The mapped entrances where they are, and the lobby's door to the street."""
+    if entrances:
+        _exterior_door(plan, rng, street=street, entrances=entrances)
+    lobby = next((i for i, r in enumerate(plan.rooms, 1) if r.kind == "lobby"), None)
+    if lobby is None:
+        return
+    for x, y, d in plan.doors:
+        pair = {_room_at(plan, x, y),
+                _room_at(plan, x - 1, y) if d == "W" else _room_at(plan, x, y - 1)}
+        if pair == {lobby, 0}:
+            return
+    runs = _outside_runs(plan, lobby)
+    if not runs:
+        return
+    _side, wall = max(runs, key=lambda r: (r[0] == (street or "S"), len(r[1])))
+    front = wall[len(wall) // 2]
+    plan.doors.append(front)
+    if not entrances:
+        _more_ways_in(plan, front)
 
 
 def _hangs_on_wall(plan: Plan, role: str, x: int, y: int, d: str,

@@ -56,12 +56,15 @@ def _shape(n: int, lifts_west: bool) -> TowerCore:
     for i in range(n):
         y = s * i
         core.lifts.append(((lift_x, y, lift_x + s - 1, y + s - 1), (door_x, y, "W")))
-    # Two toilets and a riser stacked down the far side.
-    each = (long_ - 2) // 2
-    y = 0
-    for kind, h in (("bathroom", each), ("bathroom", each), ("storage", long_ - 2 * each)):
+    # Toilets and a riser stacked down the far side, each at least MIN_ROOM
+    # deep: a thinner room is a sliver layout._mend_fragments folds away. A
+    # hall too short for three keeps one toilet and the riser.
+    kinds = ("bathroom", "bathroom", "storage")[-min(3, long_ // layout.MIN_ROOM):]
+    each = long_ // len(kinds)
+    for i, kind in enumerate(kinds):
+        y = each * i
+        h = each if i < len(kinds) - 1 else long_ - y
         core.service.append(((svc_x, y, svc_x + SERVICE_WIDE - 1, y + h - 1), kind))
-        y += h
     return core
 
 
